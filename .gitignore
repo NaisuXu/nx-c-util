@@ -1,0 +1,51 @@
+# ---- Build directories (CMake out-of-source builds) ----
+build/
+Build/
+out/
+cmake-build-*/
+
+# ---- CMake generated files ----
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+CMakeUserPresets.json
+Testing/
+
+# ---- Compiled objects / libraries / executables ----
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# ---- Debug / build metadata ----
+*.d
+*.gcno
+*.gcda
+*.gcov
+*.su
+*.idb
+*.pdb
+*.ilk
+*.map
+
+# ---- Editor / IDE ----
+.vscode/
+.vs/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
