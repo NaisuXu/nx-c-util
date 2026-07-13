@@ -42,7 +42,7 @@ extern "C" {
  * override the default.
  */
 #ifndef NX_TIERED_MEM_POOL_MAX_TIERS
-#define NX_TIERED_MEM_POOL_MAX_TIERS 8
+#define NX_TIERED_MEM_POOL_MAX_TIERS 4
 #endif
 
 /**
@@ -147,12 +147,12 @@ typedef struct {
  *         NX_TIERED_ERR_CONFIG if a tier config is invalid, memory is unaligned,
  *         there are too many tiers, or the buffer is too small.
  */
-nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t       *pool,
-                                    void                     *memory,
-                                    size_t                    memory_size,
+nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t    *pool,
+                                    void                        *memory,
+                                    size_t                      memory_size,
                                     const nx_tiered_level_cfg_t *tiers,
-                                    size_t                    tier_count,
-                                    bool                      forbid_fallback);
+                                    size_t                      tier_count,
+                                    bool                        forbid_fallback);
 
 /**
  * @brief  Allocate a block of at least @p size bytes.
@@ -198,7 +198,7 @@ nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr);
  * @return NX_TIERED_OK on success; NX_TIERED_ERR_PARAM on invalid argument.
  */
 nx_tiered_ret_t nx_tiered_mem_pool_get_stat(const nx_tiered_mem_pool_t *pool,
-                                        nx_tiered_pool_stat_t      *out);
+                                        nx_tiered_pool_stat_t          *out);
 
 #ifdef __cplusplus
 }
