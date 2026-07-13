@@ -107,23 +107,3 @@ void nx_queue_clear(nx_queue_t *q)
     q->head  = 0U;
     q->count = 0U;
 }
-
-size_t nx_queue_size(const nx_queue_t *q)
-{
-    return (q != NULL) ? q->count : 0U;
-}
-
-size_t nx_queue_capacity(const nx_queue_t *q)
-{
-    return (q != NULL) ? q->capacity : 0U;
-}
-
-bool nx_queue_is_empty(const nx_queue_t *q)
-{
-    return (q == NULL) || (q->count == 0U);
-}
-
-bool nx_queue_is_full(const nx_queue_t *q)
-{
-    return (q == NULL) || (q->buffer == NULL) || (q->count == q->capacity);
-}

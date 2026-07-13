@@ -128,22 +128,34 @@ void nx_queue_clear(nx_queue_t *q);
 /**
  * @brief  Return the current number of elements. A NULL pointer is treated as 0.
  */
-size_t nx_queue_size(const nx_queue_t *q);
+static inline size_t nx_queue_size(const nx_queue_t *q)
+{
+    return (q != NULL) ? q->count : 0U;
+}
 
 /**
  * @brief  Return the queue capacity (number of elements). A NULL pointer is treated as 0.
  */
-size_t nx_queue_capacity(const nx_queue_t *q);
+static inline size_t nx_queue_capacity(const nx_queue_t *q)
+{
+    return (q != NULL) ? q->capacity : 0U;
+}
 
 /**
  * @brief  Whether the queue is empty. A NULL pointer is treated as "empty".
  */
-bool nx_queue_is_empty(const nx_queue_t *q);
+static inline bool nx_queue_is_empty(const nx_queue_t *q)
+{
+    return (q == NULL) || (q->count == 0U);
+}
 
 /**
  * @brief  Whether the queue is full. A NULL pointer is treated as "full" (cannot be written to).
  */
-bool nx_queue_is_full(const nx_queue_t *q);
+static inline bool nx_queue_is_full(const nx_queue_t *q)
+{
+    return (q == NULL) || (q->buffer == NULL) || (q->count == q->capacity);
+}
 
 #ifdef __cplusplus
 }
