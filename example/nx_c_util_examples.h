@@ -14,4 +14,7 @@ int nx_queue_example_run(void);
 /** Run the nx_tiered_mem_pool usage examples. Returns 0 on success, non-zero on failure. */
 int nx_tiered_mem_pool_example_run(void);
 
+/** Run the nx_ref_msg usage examples. Returns 0 on success, non-zero on failure. */
+int nx_ref_msg_example_run(void);
+
 #endif /* NX_C_UTIL_EXAMPLES_H */

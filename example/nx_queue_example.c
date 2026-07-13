@@ -20,7 +20,7 @@
 /* ------------------------------------------------------------------ */
 static void example_basic_fifo(void)
 {
-    printf("=== Example 1: basic integer FIFO (reject when full) ===\n");
+    printf("Example 1: basic integer FIFO (reject when full)\n");
 
     int         storage[4];   /* caller-owned backing storage */
     nx_queue_t  q;
@@ -62,7 +62,7 @@ typedef struct {
 
 static void example_overwrite_ring(void)
 {
-    printf("=== Example 2: overwriting ring buffer (keep newest 3) ===\n");
+    printf("Example 2: overwriting ring buffer (keep newest 3)\n");
 
     sample_t    storage[3];
     nx_queue_t  q;
@@ -89,7 +89,7 @@ static void example_overwrite_ring(void)
 /* ------------------------------------------------------------------ */
 static void example_clear_and_state(void)
 {
-    printf("=== Example 3: clear and state queries ===\n");
+    printf("Example 3: clear and state queries\n");
 
     char        storage[8];   /* a queue of single bytes/chars */
     nx_queue_t  q;

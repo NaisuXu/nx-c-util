@@ -92,6 +92,60 @@ void *p = nx_tiered_mem_pool_alloc(&pool, 20);   /* served by the 32-byte tier *
 nx_tiered_mem_pool_free(&pool, p);               /* owning tier inferred from address */
 ```
 
+### nx_ref_msg — reference-counted zero-copy messages
+
+A message dispatch layer built on top of the two modules above: a message is
+allocated once from an `nx_tiered_mem_pool` and delivered to one or more
+`nx_queue`s. What a queue stores is a *pointer* to the message, not a copy, so
+every consumer shares the same data — zero copy. A reference count decides when
+the block goes back to the pool.
+
+- **Single allocation** — the message header and its data are one contiguous
+  block (the data is a flexible array member, aligned to `max_align_t`), so
+  `alloc` and the final `free` are each a single pool operation.
+- **Reference-counting convention** — `alloc` returns the message with a refcount
+  of 1 (the *producer reference*); each successful publish does +1; each consumer
+  does `release` (-1) when done. The block is returned to the pool when the count
+  reaches 0. The producer must `release` once after publishing to give up its own
+  reference — this also lets a message delivered to *no* queue be freed with no
+  leak.
+- **Multi-queue publish** — `publish` sends to one queue, `publish_multi` sends to
+  an array of queues in one call (a `NULL` entry is skipped); both increment the
+  refcount only on a successful enqueue, so a full queue never leaks a reference.
+  The queue set is organized by the caller; this module keeps no subscription
+  table.
+- **Reject-only queues** — initialize carrier queues with `nx_ref_msg_queue_init`
+  (element size is fixed to a message pointer). The full-queue policy is forced to
+  reject, because overwriting would silently drop an enqueued message and leak its
+  reference.
+- **Not thread-safe** — the refcount is a plain counter; concurrent access must be
+  locked by the caller.
+
+```c
+#include "nx_ref_msg.h"
+
+/* one consumer queue (its buffer holds message pointers) */
+nx_ref_msg_t *qbuf[4];
+nx_queue_t    q;
+nx_ref_msg_queue_init(&q, qbuf, 4);
+
+/* producer: allocate from a pool, fill, publish, then release its reference */
+nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, 16);   /* refcount = 1 */
+memcpy(nx_ref_msg_data(m), payload, 16);
+
+nx_queue_t *group[] = { &q, /* &q2, &q3, ... */ };
+size_t delivered = 0;
+nx_ref_msg_publish_multi(m, group, 1, &delivered); /* refcount = 1 + delivered */
+nx_ref_msg_release(m);                             /* give up producer reference */
+
+/* consumer: pop the shared message, use it, release when done */
+nx_ref_msg_t *got = NULL;
+if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
+    /* ... read nx_ref_msg_data(got), nx_ref_msg_len(got) ... */
+    nx_ref_msg_release(got);                       /* frees when the last ref is gone */
+}
+```
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project

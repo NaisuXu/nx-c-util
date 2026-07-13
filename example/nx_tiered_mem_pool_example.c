@@ -124,5 +124,7 @@ int nx_tiered_mem_pool_example_run(void)
     printf("Final pool stats (note the peak high-water marks):\n");
     dump_stats(&pool);
 
+    printf("\n");
+
     return 0;
 }
