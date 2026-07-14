@@ -164,22 +164,26 @@ nx_ref_msg_ret_t nx_ref_msg_release(nx_ref_msg_t *msg);
 /**
  * @brief  Publish the message to multiple queues in one call.
  *
- * Calls nx_ref_msg_publish for each queue in @p queues: each successful enqueue
- * does refcount +1; a full queue (or a NULL entry) is skipped and holds no
- * reference. The queue set is organized by the caller; this module keeps no
- * subscription table. @p out_delivered returns the number of successful deliveries.
+ * @p queues is a NULL-terminated array: nx_ref_msg_publish is called for each
+ * entry up to (but not including) the first NULL. Each successful enqueue does
+ * refcount +1; a full queue is skipped and holds no reference. The queue set is
+ * organized by the caller; this module keeps no subscription table.
+ * @p out_delivered returns the number of successful deliveries.
+ *
+ * @warning The array MUST end with a NULL entry. Because there is no count, a
+ *          missing terminator makes this function read past the end of the array
+ *          (undefined behavior). Consequently NULL cannot be used as a mid-array
+ *          "skip" placeholder - the first NULL ends the list.
  *
  * @param  msg           Message handle, must not be NULL.
- * @param  queues        Array of queue pointers, must not be NULL; individual entries may be NULL (skipped).
- * @param  count         Array length.
+ * @param  queues        NULL-terminated array of queue pointers, must not be NULL.
  * @param  out_delivered May be NULL; if non-NULL, receives the number of successful deliveries.
  *
- * @return NX_REF_MSG_OK on success (including delivering to 0 queues);
+ * @return NX_REF_MSG_OK on success (including an immediately-NULL, i.e. empty, list);
  *         NX_REF_MSG_ERR_PARAM if msg / queues is NULL.
  */
 nx_ref_msg_ret_t nx_ref_msg_publish_multi(nx_ref_msg_t      *msg,
                                           nx_queue_t *const *queues,
-                                          size_t             count,
                                           size_t            *out_delivered);
 
 #ifdef __cplusplus

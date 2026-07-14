@@ -76,11 +76,12 @@ int nx_ref_msg_example_run(void)
     assert(nx_ref_msg_refcount(m) == 1);
     printf("\n");
 
-    /* ---- 2. publish to multiple queues at once (with a NULL hole) ---- */
+    /* ---- 2. publish to multiple queues at once ---- */
     printf("Example 2: publish to 3 queues in one call (zero copy)\n");
-    nx_queue_t *group[] = { &qa, &qb, NULL, &qc };   /* NULL entry is skipped */
+    /* NULL-terminated array: the trailing NULL marks the end of the list. */
+    nx_queue_t *group[] = { &qa, &qb, &qc, NULL };
     size_t delivered = 0;
-    nx_ref_msg_publish_multi(m, group, 4, &delivered);
+    nx_ref_msg_publish_multi(m, group, &delivered);
     printf("  delivered=%zu, refcount=%zu (1 producer + %zu queues)\n",
            delivered, nx_ref_msg_refcount(m), delivered);
     assert(delivered == 3);
@@ -113,8 +114,8 @@ int nx_ref_msg_example_run(void)
     /* ---- 4. a message delivered to nobody still frees cleanly ---- */
     printf("Example 4: publish to zero queues, no leak\n");
     nx_ref_msg_t *m2 = nx_ref_msg_alloc(&pool, 8);
-    nx_queue_t *none[] = { NULL, NULL };
-    nx_ref_msg_publish_multi(m2, none, 2, &delivered);
+    nx_queue_t *none[] = { NULL };   /* immediately NULL: an empty list */
+    nx_ref_msg_publish_multi(m2, none, &delivered);
     printf("  delivered=%zu, refcount=%zu\n", delivered, nx_ref_msg_refcount(m2));
     assert(delivered == 0 && nx_ref_msg_refcount(m2) == 1);
     nx_ref_msg_release(m2);   /* producer reference -> 0, freed */

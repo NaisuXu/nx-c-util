@@ -119,10 +119,9 @@ the block goes back to the pool.
   reference — this also lets a message delivered to *no* queue be freed with no
   leak.
 - **Multi-queue publish** — `publish` sends to one queue, `publish_multi` sends to
-  an array of queues in one call (a `NULL` entry is skipped); both increment the
-  refcount only on a successful enqueue, so a full queue never leaks a reference.
-  The queue set is organized by the caller; this module keeps no subscription
-  table.
+  a `NULL`-terminated array of queues in one call; both increment the refcount only
+  on a successful enqueue, so a full queue never leaks a reference. The queue set is
+  organized by the caller; this module keeps no subscription table.
 - **Reject-only queues** — initialize carrier queues with `nx_ref_msg_queue_init`
   (element size is fixed to a message pointer). The full-queue policy is forced to
   reject, because overwriting would silently drop an enqueued message and leak its
@@ -142,9 +141,9 @@ nx_ref_msg_queue_init(&q, qbuf, 4);
 nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, 16);   /* refcount = 1 */
 memcpy(nx_ref_msg_data(m), payload, 16);
 
-nx_queue_t *group[] = { &q, /* &q2, &q3, ... */ };
+nx_queue_t *group[] = { &q, /* &q2, &q3, ... */ NULL };  /* NULL-terminated */
 size_t delivered = 0;
-nx_ref_msg_publish_multi(m, group, 1, &delivered); /* refcount = 1 + delivered */
+nx_ref_msg_publish_multi(m, group, &delivered);    /* refcount = 1 + delivered */
 nx_ref_msg_release(m);                             /* give up producer reference */
 
 /* consumer: pop the shared message, use it, release when done */

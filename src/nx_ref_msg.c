@@ -76,7 +76,6 @@ nx_ref_msg_ret_t nx_ref_msg_release(nx_ref_msg_t *msg)
 
 nx_ref_msg_ret_t nx_ref_msg_publish_multi(nx_ref_msg_t      *msg,
                                           nx_queue_t *const *queues,
-                                          size_t             count,
                                           size_t            *out_delivered)
 {
     if (msg == NULL || queues == NULL) {
@@ -84,12 +83,9 @@ nx_ref_msg_ret_t nx_ref_msg_publish_multi(nx_ref_msg_t      *msg,
     }
 
     size_t delivered = 0u;
-    for (size_t i = 0u; i < count; i++) {
-        nx_queue_t *q = queues[i];
-        if (q == NULL) {
-            continue;   /* allow NULL holes in the array; skip them */
-        }
-        if (nx_ref_msg_publish(msg, q) == NX_REF_MSG_OK) {
+    /* NULL-terminated: stop at the first NULL entry. */
+    for (size_t i = 0u; queues[i] != NULL; i++) {
+        if (nx_ref_msg_publish(msg, queues[i]) == NX_REF_MSG_OK) {
             delivered++;
         }
         /* On failure (e.g. queue full): skip this queue, hold no reference. */
