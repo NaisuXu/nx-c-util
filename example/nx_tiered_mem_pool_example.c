@@ -58,17 +58,28 @@ int nx_tiered_mem_pool_example_run(void)
     printf("########## nx_tiered_mem_pool examples ##########\n");
     printf("pool buffer = %zu bytes\n\n", (size_t)POOL_BYTES);
 
-    const nx_tiered_level_cfg_t cfg[] = {
-        { TIER_S_SIZE, TIER_S_COUNT },
-        { TIER_M_SIZE, TIER_M_COUNT },
-        { TIER_L_SIZE, TIER_L_COUNT },
+    /* The whole configuration lives in one struct; the tier list is embedded. */
+    nx_tiered_mem_pool_cfg_t cfg = {
+        .memory      = g_pool_mem,
+        .memory_size = sizeof(g_pool_mem),
+        .tiers       = {
+            { TIER_S_SIZE, TIER_S_COUNT },
+            { TIER_M_SIZE, TIER_M_COUNT },
+            { TIER_L_SIZE, TIER_L_COUNT },
+        },
+        .tier_count  = 3,
+        /* forbid_fallback omitted -> false: allow fallback to a larger tier */
     };
-    nx_tiered_ret_t r = nx_tiered_mem_pool_init(&pool, g_pool_mem, sizeof(g_pool_mem),
-                                            cfg, 3, false);   /* false: allow fallback to a larger tier */
+
+    /* out_required_bytes tells you the exact size the tiers need; oversize the
+     * buffer at first, run once, then shrink it to this number. */
+    size_t          required = 0;
+    nx_tiered_ret_t r = nx_tiered_mem_pool_init(&pool, &cfg, &required);
     if (r != NX_TIERED_OK) {
-        printf("pool init failed: %d\n", (int)r);
+        printf("pool init failed: %d (tiers need %zu bytes)\n", (int)r, required);
         return 1;
     }
+    printf("tiers require %zu of %zu buffer bytes\n\n", required, (size_t)POOL_BYTES);
 
     /* ---- 2. allocate various sizes ---------------------------------- */
     printf("Example 1: allocate different sizes\n");

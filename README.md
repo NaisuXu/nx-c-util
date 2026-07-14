@@ -67,6 +67,10 @@ several "tiers" of equally sized blocks carved out of one caller-provided buffer
 - **Configurable fallback** — when the ideal tier is exhausted the pool can
   automatically fall back to a larger tier; set `forbid_fallback` at init time to
   restrict allocation strictly to the best-fit tier instead.
+- **One-struct configuration** — all init parameters (buffer, tier list, policy)
+  live in a single `nx_tiered_mem_pool_cfg_t` with the tier list embedded inline;
+  init also reports the exact bytes the tiers need, so you can oversize the buffer
+  and shrink it to fit after one run.
 - **Built-in statistics** — per-tier block size, block count, free count, and a
   peak-usage high-water mark for tuning and diagnostics.
 - **Not thread-safe** — concurrent access must be locked by the caller.
@@ -74,22 +78,27 @@ several "tiers" of equally sized blocks carved out of one caller-provided buffer
 ```c
 #include "nx_tiered_mem_pool.h"
 
-/* buffer must be max_align_t aligned; sized to fit all tiers */
+/* buffer must be max_align_t aligned; oversize it and let init report the exact need */
 static _Alignas(max_align_t) uint8_t mem[32 * 8 + 128 * 4];
 
-const nx_tiered_level_cfg_t tiers[] = {
-    { 32, 8 },    /* 8 blocks of 32 bytes  */
-    { 128, 4 },   /* 4 blocks of 128 bytes */
+nx_tiered_mem_pool_t     pool;
+nx_tiered_mem_pool_cfg_t cfg = {
+    .memory      = mem,
+    .memory_size = sizeof(mem),
+    .tiers       = {
+        { 32, 8 },     /* 8 blocks of 32 bytes  */
+        { 128, 4 },    /* 4 blocks of 128 bytes */
+    },
+    .tier_count  = 2,
+    /* forbid_fallback omitted -> false: a request may fall back to a larger tier */
 };
 
-nx_tiered_mem_pool_t pool;
+size_t required = 0;
+nx_tiered_mem_pool_init(&pool, &cfg, &required);   /* required = exact bytes needed */
 
-/* last arg = forbid_fallback: false lets a request fall back to a larger tier */
-nx_tiered_mem_pool_init(&pool, mem, sizeof(mem), tiers, 2, false);
-
-void *p = nx_tiered_mem_pool_alloc(&pool, 20);   /* served by the 32-byte tier */
+void *p = nx_tiered_mem_pool_alloc(&pool, 20);     /* served by the 32-byte tier */
 /* ... use p ... */
-nx_tiered_mem_pool_free(&pool, p);               /* owning tier inferred from address */
+nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from address */
 ```
 
 ### nx_ref_msg — reference-counted zero-copy messages

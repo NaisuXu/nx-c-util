@@ -85,47 +85,63 @@ static nx_tiered_ret_t nx_tiered_tier_bytes(const nx_tiered_level_cfg_t *cfg,
     return NX_TIERED_OK;
 }
 
-nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t       *pool,
-                                    void                     *memory,
-                                    size_t                    memory_size,
-                                    const nx_tiered_level_cfg_t *tiers,
-                                    size_t                    tier_count,
-                                    bool                      forbid_fallback)
+nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
+                                        const nx_tiered_mem_pool_cfg_t *cfg,
+                                        size_t                         *out_required_bytes)
 {
-    if (pool == NULL || memory == NULL || memory_size == 0u ||
-        tiers == NULL || tier_count == 0u) {
+    if (out_required_bytes != NULL) {
+        *out_required_bytes = 0u;
+    }
+    if (pool == NULL || cfg == NULL) {
         return NX_TIERED_ERR_PARAM;
     }
-    if (tier_count > NX_TIERED_MEM_POOL_MAX_TIERS) {
+    if (cfg->memory == NULL || cfg->memory_size == 0u || cfg->tier_count == 0u) {
+        return NX_TIERED_ERR_PARAM;
+    }
+    if (cfg->tier_count > NX_TIERED_MEM_POOL_MAX_TIERS) {
         return NX_TIERED_ERR_CONFIG;
     }
+
+    /* First pass: validate every tier and sum the total bytes required, so the
+     * caller learns the exact size even when the buffer turns out too small. */
+    size_t required = 0u;
+    for (size_t i = 0u; i < cfg->tier_count; i++) {
+        size_t        seg_bytes;
+        nx_tiered_ret_t r = nx_tiered_tier_bytes(&cfg->tiers[i], &seg_bytes);
+        if (r != NX_TIERED_OK) {
+            return r;   /* invalid tier config; required stays 0 */
+        }
+        if (seg_bytes > (SIZE_MAX - required)) {
+            return NX_TIERED_ERR_CONFIG;   /* total overflows */
+        }
+        required += seg_bytes;
+    }
+    if (out_required_bytes != NULL) {
+        *out_required_bytes = required;
+    }
+
     /* The whole buffer must be aligned so every tier's and every block's start
      * address is aligned too. */
-    if (((uintptr_t)memory % NX_TIERED_ALIGN) != 0u) {
+    if (((uintptr_t)cfg->memory % NX_TIERED_ALIGN) != 0u) {
         return NX_TIERED_ERR_CONFIG;
     }
+    if (cfg->memory_size < required) {
+        return NX_TIERED_ERR_CONFIG;   /* buffer too small; required already reported */
+    }
 
-    /* Carve the whole buffer among the tiers in turn, validating each and
-     * insertion-sorting them by ascending block size. */
-    uint8_t *cursor    = (uint8_t *)memory;
-    size_t   remaining = memory_size;
+    /* Second pass: carve the buffer among the tiers, insertion-sorting them by
+     * ascending block size. */
+    uint8_t *cursor = (uint8_t *)cfg->memory;
 
     pool->tier_count      = 0u;
-    pool->forbid_fallback = forbid_fallback;
-    for (size_t i = 0u; i < tier_count; i++) {
-        size_t        seg_bytes;
-        nx_tiered_ret_t r = nx_tiered_tier_bytes(&tiers[i], &seg_bytes);
-        if (r != NX_TIERED_OK) {
-            return r;
-        }
-        if (seg_bytes > remaining) {
-            return NX_TIERED_ERR_CONFIG;   /* whole buffer is not large enough */
-        }
+    pool->forbid_fallback = cfg->forbid_fallback;
+    for (size_t i = 0u; i < cfg->tier_count; i++) {
+        size_t seg_bytes;
+        (void)nx_tiered_tier_bytes(&cfg->tiers[i], &seg_bytes);   /* validated in pass 1 */
 
         nx_tiered_level_t t;
-        (void)nx_tiered_tier_setup(&t, &tiers[i], cursor);   /* already validated above */
-        cursor    += seg_bytes;
-        remaining -= seg_bytes;
+        (void)nx_tiered_tier_setup(&t, &cfg->tiers[i], cursor);   /* validated in pass 1 */
+        cursor += seg_bytes;
 
         size_t pos = pool->tier_count;
         while (pos > 0u && pool->tiers[pos - 1u].block_size > t.block_size) {

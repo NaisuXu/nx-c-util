@@ -57,18 +57,6 @@ typedef enum {
 } nx_tiered_ret_t;
 
 /**
- * @brief Config for a single tier, provided by the caller at init time.
- *
- * Storage is not specified here - all tiers share the one buffer passed to
- * nx_tiered_mem_pool_init(), which the pool carves by block_size * block_count
- * in turn.
- */
-typedef struct {
-    size_t  block_size;    /**< Size of a single block in bytes (rounded up to the alignment at init); must be >= sizeof(void*) */
-    size_t  block_count;   /**< Number of blocks in this tier; must be > 0 */
-} nx_tiered_level_cfg_t;
-
-/**
  * @brief Runtime state of a single tier.
  *
  * @note  Implementation detail; do not access directly.
@@ -95,6 +83,44 @@ typedef struct {
 } nx_tiered_mem_pool_t;
 
 /**
+ * @brief Config for a single tier, provided by the caller at init time.
+ *
+ * Storage is not specified here - all tiers share the one buffer passed to
+ * nx_tiered_mem_pool_init(), which the pool carves by block_size * block_count
+ * in turn.
+ */
+typedef struct {
+    size_t  block_size;    /**< Size of a single block in bytes (rounded up to the alignment at init); must be >= sizeof(void*) */
+    size_t  block_count;   /**< Number of blocks in this tier; must be > 0 */
+} nx_tiered_level_cfg_t;
+
+/**
+ * @brief Config for initializing a pool (everything except the pool handle).
+ *
+ * Declare one of these, fill it (a designated initializer reads nicely and lets
+ * you omit forbid_fallback, which then defaults to false), and pass it to
+ * nx_tiered_mem_pool_init(). The tier list is embedded inline, so the whole
+ * configuration lives in one place - no separate tier array to declare.
+ *
+ * @code
+ *   static _Alignas(max_align_t) uint8_t mem[2048];
+ *   nx_tiered_mem_pool_cfg_t cfg = {
+ *       .memory      = mem,
+ *       .memory_size = sizeof(mem),
+ *       .tiers       = { {32, 8}, {128, 4}, {512, 2} },
+ *       .tier_count  = 3,
+ *   };
+ * @endcode
+ */
+typedef struct {
+    void                 *memory;       /**< Caller buffer, must be max_align_t aligned and not NULL */
+    size_t                memory_size;  /**< Size of @c memory in bytes */
+    nx_tiered_level_cfg_t tiers[NX_TIERED_MEM_POOL_MAX_TIERS];  /**< Embedded tier list (first tier_count entries used) */
+    size_t                tier_count;   /**< Number of tiers, in [1, NX_TIERED_MEM_POOL_MAX_TIERS] */
+    bool                  forbid_fallback;  /**< Fallback policy on exhaustion; false (default) allows falling back to a larger tier */
+} nx_tiered_mem_pool_cfg_t;
+
+/**
  * @brief Statistics snapshot of a single tier (for tuning / diagnostics).
  */
 typedef struct {
@@ -113,46 +139,33 @@ typedef struct {
 } nx_tiered_pool_stat_t;
 
 /**
- * @brief  Initialize the pool with one buffer and a set of tier configs.
+ * @brief  Initialize the pool from a configuration struct.
  *
- * The pool carves @p memory into consecutive regions by each tier's block_size
- * (rounded up to max_align_t alignment) x block_count. Tiers may be passed in
- * any order; they are sorted internally by ascending block size.
+ * The pool carves @c cfg->memory into consecutive regions by each tier's
+ * block_size (rounded up to max_align_t alignment) x block_count. Tiers may be
+ * given in any order; they are sorted internally by ascending block size.
  *
- * On buffer size: each tier actually occupies "block_size rounded up to
- * max_align_t alignment" x block_count. The whole buffer must be >= the sum of
- * all tiers' occupancy, otherwise init returns NX_TIERED_ERR_CONFIG. If each
- * block_size is already a multiple of max_align_t (a common practice), the
- * occupancy is just block_size x block_count and can be summed directly;
- * otherwise round up by the alignment first, or simply oversize the buffer.
+ * On buffer size: each tier occupies "block_size rounded up to max_align_t
+ * alignment" x block_count, and the buffer must be >= the sum over all tiers.
+ * Rather than compute that by hand, you can oversize the buffer and read the
+ * exact requirement back through @p out_required_bytes: it is written whenever
+ * the tier list is valid - including when the buffer is too small (which returns
+ * NX_TIERED_ERR_CONFIG) - so you can run once, see the number, then shrink the
+ * buffer to fit.
  *
- * @param  memory      Caller-provided static storage, must be max_align_t
- *                     aligned and not NULL. Declaring it with
- *                     _Alignas(max_align_t) is recommended.
- * @param  memory_size Size of @p memory in bytes; must be >= the total bytes the
- *                     tiers need.
- * @param  pool        Pool handle, must not be NULL.
- * @param  tiers       Array of tier configs, must not be NULL.
- * @param  tier_count  Number of tiers, in [1, NX_TIERED_MEM_POOL_MAX_TIERS].
- * @param  forbid_fallback  Fallback policy on tier exhaustion:
- *                     - false: when an ideal tier fills up, alloc automatically
- *                       falls back to a larger tier;
- *                     - true: allocation is restricted strictly to tiers whose
- *                       block size equals the ideal tier's, never borrowing from
- *                       a larger tier; when those are also exhausted, alloc
- *                       returns NULL.
+ * @param  pool               Pool handle, must not be NULL.
+ * @param  cfg                Configuration, must not be NULL (see nx_tiered_mem_pool_cfg_t).
+ * @param  out_required_bytes May be NULL; if non-NULL, receives the total bytes the
+ *                            tiers require (valid whenever the tier list is valid).
  *
  * @return NX_TIERED_OK on success;
- *         NX_TIERED_ERR_PARAM if an argument is NULL/zero;
+ *         NX_TIERED_ERR_PARAM if pool/cfg is NULL, or memory/memory_size/tier_count is zero/NULL;
  *         NX_TIERED_ERR_CONFIG if a tier config is invalid, memory is unaligned,
  *         there are too many tiers, or the buffer is too small.
  */
-nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t    *pool,
-                                    void                        *memory,
-                                    size_t                      memory_size,
-                                    const nx_tiered_level_cfg_t *tiers,
-                                    size_t                      tier_count,
-                                    bool                        forbid_fallback);
+nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
+                                        const nx_tiered_mem_pool_cfg_t *cfg,
+                                        size_t                         *out_required_bytes);
 
 /**
  * @brief  Allocate a block of at least @p size bytes.

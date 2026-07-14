@@ -50,9 +50,13 @@ int nx_ref_msg_example_run(void)
 
     /* ---- setup: a single-tier pool + three queues ---- */
     nx_tiered_mem_pool_t pool;
-    const nx_tiered_level_cfg_t cfg[] = { { POOL_BLK, POOL_NBLK } };
-    if (nx_tiered_mem_pool_init(&pool, g_pool_mem, sizeof(g_pool_mem),
-                                cfg, 1, false) != NX_TIERED_OK) {
+    nx_tiered_mem_pool_cfg_t cfg = {
+        .memory      = g_pool_mem,
+        .memory_size = sizeof(g_pool_mem),
+        .tiers       = { { POOL_BLK, POOL_NBLK } },
+        .tier_count  = 1,
+    };
+    if (nx_tiered_mem_pool_init(&pool, &cfg, NULL) != NX_TIERED_OK) {
         printf("pool init failed\n");
         return 1;
     }
