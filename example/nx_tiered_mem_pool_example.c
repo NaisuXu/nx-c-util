@@ -27,15 +27,11 @@
 #define TIER_L_SIZE  512   /* large blocks */
 #define TIER_L_COUNT 2
 
-/* Total bytes = sum of (block_size * block_count) over all tiers. The block
- * sizes here are already multiples of max_align_t's alignment, so no rounding
- * is needed; if yours are not, round each block size up (or just oversize). */
-#define POOL_BYTES ( TIER_S_SIZE * TIER_S_COUNT + \
-                     TIER_M_SIZE * TIER_M_COUNT + \
-                     TIER_L_SIZE * TIER_L_COUNT )
-
-/* Must be aligned to max_align_t so every carved block start is aligned. */
-static _Alignas(max_align_t) uint8_t g_pool_mem[POOL_BYTES];
+/* Pool storage: one whole static block. You can size this freely - just make it
+ * big enough. init reports the exact bytes the tiers need (see `required` below),
+ * so a good workflow is to oversize it here, run once, then shrink it to fit.
+ * Must be aligned to max_align_t so every carved block start is aligned. */
+static _Alignas(max_align_t) uint8_t g_pool_mem[2048];
 
 /* Print a one-line summary of every tier's current usage. */
 static void dump_stats(const nx_tiered_mem_pool_t *pool)
@@ -56,7 +52,7 @@ int nx_tiered_mem_pool_example_run(void)
 
     /* ---- 1. setup ---------------------------------------------------- */
     printf("########## nx_tiered_mem_pool examples ##########\n");
-    printf("pool buffer = %zu bytes\n\n", (size_t)POOL_BYTES);
+    printf("pool buffer = %zu bytes\n\n", sizeof(g_pool_mem));
 
     /* The whole configuration lives in one struct; the tier list is embedded. */
     nx_tiered_mem_pool_cfg_t cfg = {
@@ -79,7 +75,7 @@ int nx_tiered_mem_pool_example_run(void)
         printf("pool init failed: %d (tiers need %zu bytes)\n", (int)r, required);
         return 1;
     }
-    printf("tiers require %zu of %zu buffer bytes\n\n", required, (size_t)POOL_BYTES);
+    printf("tiers require %zu of %zu buffer bytes\n\n", required, sizeof(g_pool_mem));
 
     /* ---- 2. allocate various sizes ---------------------------------- */
     printf("Example 1: allocate different sizes\n");
