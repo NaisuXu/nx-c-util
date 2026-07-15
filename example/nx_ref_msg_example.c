@@ -2,13 +2,15 @@
  * @file    nx_ref_msg_example.c
  * @brief   Usage examples for nx_ref_msg (reference-counted zero-copy messages).
  *
- * Demonstrates:
- *   1. Allocating a message from a tiered pool and filling its data.
- *   2. Publishing one message to multiple queues in one call (zero copy: every
- *      queue receives the same pointer), and the producer-reference convention.
- *   3. Consumers popping the shared message and releasing their reference; the
- *      block returns to the pool only when the last reference is gone.
- *   4. A NULL entry in the queue array being skipped.
+ * Demonstrates a realistic producer/consumer flow:
+ *   1. A producer allocates a message from a tiered pool and fills a structured
+ *      payload (a sensor reading).
+ *   2. It publishes that one message to several queues in a single call (zero
+ *      copy - every queue holds the same object), then releases its own reference.
+ *   3. Each consumer module drains its own queue, reads the payload by its type,
+ *      "processes" it, and releases; the block returns to the pool only after the
+ *      last reference (producer + all consumers) is gone.
+ *   4. A message delivered to no queue is still freed cleanly, with no leak.
  *
  * All storage is static: the pool buffer and every queue buffer live below.
  * The example self-checks with a few asserts and prints what happens.
@@ -18,7 +20,6 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <string.h>
 
 /* ------------------------------------------------------------------ */
 /* Static storage: one pool + three consumer queues.                  */
@@ -32,6 +33,12 @@ static nx_ref_msg_t *g_qbuf_a[QCAP];
 static nx_ref_msg_t *g_qbuf_b[QCAP];
 static nx_ref_msg_t *g_qbuf_c[QCAP];
 
+/* A structured payload, as a real producer would send (not a bare string). */
+typedef struct {
+    uint32_t sensor_id;
+    int32_t  value;
+} sensor_reading_t;
+
 /* Sum of free blocks across all tiers (used to prove memory is reclaimed). */
 static size_t pool_free_blocks(nx_tiered_mem_pool_t *pool)
 {
@@ -42,6 +49,24 @@ static size_t pool_free_blocks(nx_tiered_mem_pool_t *pool)
         f += st.tiers[i].free_count;
     }
     return f;
+}
+
+/* One consumer module: pop from its own queue, use the data, then release.
+ * This is the real usage pattern - the consumer neither knows nor cares that
+ * the message is shared; it just reads what it needs and drops its reference. */
+static void consumer_drain(const char *name, nx_queue_t *q)
+{
+    nx_ref_msg_t *msg = NULL;
+    while (nx_queue_pop(q, &msg) == NX_QUEUE_OK) {
+        /* Interpret the payload by its type and "process" it. */
+        const sensor_reading_t *r = (const sensor_reading_t *)nx_ref_msg_data(msg);
+        printf("  [%s] got sensor #%u = %d  (refcount=%zu, releasing)\n",
+               name, r->sensor_id, r->value, nx_ref_msg_refcount(msg));
+
+        /* Done with it: release this consumer's reference. The message frees
+         * itself once every consumer (and the producer) has released. */
+        nx_ref_msg_release(msg);
+    }
 }
 
 int nx_ref_msg_example_run(void)
@@ -68,11 +93,15 @@ int nx_ref_msg_example_run(void)
 
     /* ---- 1. producer allocates and fills a message ---- */
     printf("Example 1: allocate a message and fill it\n");
-    nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, 16);
+    nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, sizeof(sensor_reading_t));
     assert(m != NULL);
-    strcpy((char *)nx_ref_msg_data(m), "hello world");
-    printf("  data=\"%s\" len=%zu refcount=%zu (producer)\n",
-           (char *)nx_ref_msg_data(m), nx_ref_msg_len(m), nx_ref_msg_refcount(m));
+    /* Fill the payload as a producer would (a sensor reading). */
+    sensor_reading_t *reading = (sensor_reading_t *)nx_ref_msg_data(m);
+    reading->sensor_id = 7;
+    reading->value     = 42;
+    printf("  sensor #%u = %d, len=%zu refcount=%zu (producer)\n",
+           reading->sensor_id, reading->value,
+           nx_ref_msg_len(m), nx_ref_msg_refcount(m));
     assert(nx_ref_msg_refcount(m) == 1);
     printf("\n");
 
@@ -93,27 +122,24 @@ int nx_ref_msg_example_run(void)
     assert(nx_ref_msg_refcount(m) == 3);
     printf("\n");
 
-    /* ---- 3. consumers pop the shared message and release ---- */
-    printf("Example 3: consumers pop (same pointer) and release\n");
-    nx_queue_t *queues[] = { &qa, &qb, &qc };
-    for (int i = 0; i < 3; i++) {
-        nx_ref_msg_t *got = NULL;
-        nx_queue_pop(queues[i], &got);
-        assert(got == m);   /* every queue got the very same object: zero copy */
-        printf("  consumer %d: data=\"%s\" refcount(before release)=%zu\n",
-               i, (char *)nx_ref_msg_data(got), nx_ref_msg_refcount(got));
-        nx_ref_msg_release(got);
-    }
+    /* ---- 3. each consumer drains its own queue, uses data, releases ---- */
+    printf("Example 3: consumers read their queues and release\n");
+    /* Three independent modules, each with its own queue. Each reads the shared
+     * reading (zero copy) and releases when done - exactly how it works in a
+     * real system. Only after the last release does the block return to the pool. */
+    consumer_drain("logger",  &qa);
+    consumer_drain("display", &qb);
+    consumer_drain("uploader", &qc);
 
     /* Last reference gone -> whole block returned to the pool. */
-    printf("  all released; pool free blocks = %zu/%d\n",
+    printf("  all consumers done; pool free blocks = %zu/%d\n",
            pool_free_blocks(&pool), POOL_NBLK);
     assert(pool_free_blocks(&pool) == POOL_NBLK);
     printf("\n");
 
     /* ---- 4. a message delivered to nobody still frees cleanly ---- */
     printf("Example 4: publish to zero queues, no leak\n");
-    nx_ref_msg_t *m2 = nx_ref_msg_alloc(&pool, 8);
+    nx_ref_msg_t *m2 = nx_ref_msg_alloc(&pool, sizeof(sensor_reading_t));
     nx_queue_t *none[] = { NULL };   /* immediately NULL: an empty list */
     nx_ref_msg_publish_multi(m2, none, &delivered);
     printf("  delivered=%zu, refcount=%zu\n", delivered, nx_ref_msg_refcount(m2));
@@ -123,6 +149,6 @@ int nx_ref_msg_example_run(void)
     printf("  producer released; pool fully reclaimed (%zu/%d)\n",
            pool_free_blocks(&pool), POOL_NBLK);
     printf("\n");
-    
+
     return 0;
 }
