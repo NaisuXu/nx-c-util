@@ -154,6 +154,60 @@ if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
 }
 ```
 
+### nx_can_util — CAN / CAN FD frame structures and helpers
+
+A header-only module with a generic in-memory representation of a CAN frame and
+small, dependency-free helpers. Aimed at a tool/adapter sitting between a host
+and the bus, so the frame carries not just data but also direction and error
+context.
+
+- **Classic CAN and CAN FD** — one `nx_can_msg_t` covers both; the payload is a
+  flexible array member, so the caller sizes storage to the actual length (up to
+  64 bytes). Frame attributes (`is_ext`, `is_remote`, `is_fd`, `brs`, `esi`,
+  `dlc`) are packed into a bitfield that also exposes a `flags.raw` word for fast
+  copy/compare.
+- **Host/tool direction** — `dir` (see `nx_can_dir_t`) distinguishes `TX` (host
+  asks the tool to send), `RX` (received from the bus), and `TXR` (the tool's
+  transmit-completion report for a prior `TX`).
+- **Error / result reporting** — an `is_err` flag plus a 4-bit `err_code` (see
+  `nx_can_err_t`) share one encoding across both directions: on an `RX` frame it
+  names an error frame's cause, on a `TXR` report it names why the transmit
+  failed (bit / stuff / form / ack / crc error, arbitration lost, bus-off,
+  timeout, overrun, ...).
+- **DLC helpers** — `nx_can_dlc_to_len` and `nx_can_len_to_dlc` convert between a
+  4-bit DLC and the actual byte length, handling the CAN FD sizes (12/16/20/24/
+  32/48/64) as well as classic 0..8.
+- **Header-only** — every helper is `static inline`; just include the header,
+  nothing to compile or link.
+
+```c
+#include "nx_can_util.h"
+
+/* a received CAN FD frame carrying 16 bytes */
+uint8_t          buf[sizeof(nx_can_msg_t) + 16];
+nx_can_msg_t    *msg = (nx_can_msg_t *)buf;
+msg->id             = 0x123;
+msg->flags.raw      = 0;                    /* clear all flags first */
+msg->flags.bits.dir = NX_CAN_DIR_RX;
+msg->flags.bits.is_fd = 1;
+msg->flags.bits.dlc = nx_can_len_to_dlc(16);   /* -> DLC 10 */
+/* ... fill msg->data[0..15] ... */
+
+uint32_t len = nx_can_dlc_to_len(msg->flags.bits.dlc);   /* 16 */
+
+/* the tool reports a failed transmit: arbitration was lost */
+nx_can_msg_t txr;
+txr.flags.raw           = 0;
+txr.flags.bits.dir      = NX_CAN_DIR_TXR;
+txr.flags.bits.is_err   = 1;
+txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
+```
+
+> **Note:** `flags.bits` is an in-memory layout; bitfield ordering is
+> compiler-defined. When moving frames across a wire or between toolchains,
+> serialize `flags.raw` (or pack fields explicitly) rather than memcpy'ing the
+> struct.
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project
