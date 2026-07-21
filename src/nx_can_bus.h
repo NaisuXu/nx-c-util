@@ -1,5 +1,5 @@
 /**
- * @file    nx_can_util.h
+ * @file    nx_can_bus.h
  * @brief   Common CAN / CAN FD data structures and helpers, in pure C.
  *
  * Provides a generic in-memory representation of a CAN frame (classic CAN and
@@ -10,8 +10,8 @@
  * The frame payload is a flexible array member, so the caller sizes the storage
  * to the actual data length (up to 64 bytes for CAN FD).
  */
-#ifndef NX_CAN_UTIL_H
-#define NX_CAN_UTIL_H
+#ifndef NX_CAN_BUS_H
+#define NX_CAN_BUS_H
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -143,4 +143,4 @@ static inline uint8_t nx_can_len_to_dlc(uint32_t len)
 }
 #endif
 
-#endif /* NX_CAN_UTIL_H */
+#endif /* NX_CAN_BUS_H */

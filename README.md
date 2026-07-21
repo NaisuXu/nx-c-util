@@ -154,7 +154,7 @@ if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
 }
 ```
 
-### nx_can_util — CAN / CAN FD frame structures and helpers
+### nx_can_bus — CAN / CAN FD frame structures and helpers
 
 A header-only module with a generic in-memory representation of a CAN frame and
 small, dependency-free helpers. Aimed at a tool/adapter sitting between a host
@@ -181,7 +181,7 @@ context.
   nothing to compile or link.
 
 ```c
-#include "nx_can_util.h"
+#include "nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
