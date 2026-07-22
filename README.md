@@ -256,6 +256,39 @@ nx_crc_update(&ctx, msg + 4, 5);            /* "56789" */
 uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
 ```
 
+### nx_sha256 — SHA-256 cryptographic hash
+
+A pure-C SHA-256 (FIPS 180-4) implementation producing a 32-byte digest.
+
+- **Two ways to hash** — a one-shot helper (`nx_sha256`) for a whole buffer, and
+  an incremental context API (`nx_sha256_init` / `nx_sha256_update` /
+  `nx_sha256_final`) for data that arrives in pieces; a chunked computation
+  yields exactly the same digest as the one-shot call.
+- **Fixed, caller-owned storage** — the running state is a single
+  `nx_sha256_ctx_t` the caller places on the stack; no dynamic memory, no tables
+  beyond the fixed round constants, fully deterministic.
+- **NULL-safe** — a NULL data pointer contributes no bytes and a NULL context or
+  digest pointer is a harmless no-op.
+- **Plain hash, not a MAC** — for message authentication, build HMAC-SHA256 on
+  top of it.
+
+```c
+#include "nx_sha256.h"
+
+uint8_t digest[NX_SHA256_DIGEST_SIZE];
+
+/* one-shot */
+nx_sha256("abc", 3, digest);
+/* digest = ba7816bf 8f01cfea ... f20015ad */
+
+/* the same digest, fed in over several chunks */
+nx_sha256_ctx_t ctx;
+nx_sha256_init(&ctx);
+nx_sha256_update(&ctx, "a", 1);
+nx_sha256_update(&ctx, "bc", 2);
+nx_sha256_final(&ctx, digest);
+```
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project
