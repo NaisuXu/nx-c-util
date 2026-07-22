@@ -14,9 +14,11 @@ add_executable(nx_c_util_examples
     nx_queue_example.c
     nx_tiered_mem_pool_example.c
     nx_ref_msg_example.c
+    nx_sha256_example.c
     ${NX_SRC_DIR}/nx_queue.c
     ${NX_SRC_DIR}/nx_tiered_mem_pool.c
     ${NX_SRC_DIR}/nx_ref_msg.c
+    ${NX_SRC_DIR}/nx_sha256.c
 )
 
 target_include_directories(nx_c_util_examples PRIVATE
