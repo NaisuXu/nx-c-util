@@ -208,6 +208,54 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
 > serialize `flags.raw` (or pack fields explicitly) rather than memcpy'ing the
 > struct.
 
+### nx_crc — CRC-8 / CRC-16 / CRC-32 checksums
+
+Bit-wise CRC routines with no lookup tables, so there is nothing to size or
+store and every call is deterministic.
+
+- **Three layers** — named wrappers for the common standards; generic one-shot
+  functions (`nx_crc8_compute` / `nx_crc16_compute` / `nx_crc32_compute`) taking
+  the Rocksoft model parameters (polynomial, init, input/output reflection,
+  final XOR) for any variant; and an incremental context API
+  (`nx_crc_init` / `nx_crc_update` / `nx_crc_final`) for data that arrives in
+  pieces — a chunked computation yields exactly the same result as the one-shot
+  call.
+- **Standard variants included** — CRC-8, CRC-8/ITU, CRC-8/ROHC, CRC-8/MAXIM;
+  CRC-16 IBM/MAXIM/USB/MODBUS/CCITT/CCITT-FALSE/X25/XMODEM; CRC-32 and
+  CRC-32/MPEG-2. Each is documented in the header with its parameters and its
+  check value (the CRC of `"123456789"`).
+- **Table-free** — a single bit-wise core handles every width and refin/refout
+  combination, so no polynomial tables are compiled in; small code, no table RAM.
+- **NULL-safe** — a NULL data pointer contributes no bytes (treated as a
+  zero-length buffer) instead of dereferencing, and a NULL context is a no-op;
+  storage is caller-owned and the library uses no dynamic memory.
+
+```c
+#include "nx_crc.h"
+
+const char *msg = "123456789";
+
+/* a named standard variant */
+uint16_t c1 = nx_crc16_modbus(msg, 9);      /* 0x4B37 */
+uint32_t c2 = nx_crc32(msg, 9);             /* 0xCBF43926 */
+
+/* any other variant via the generic function
+ * (here: CRC-16/MODBUS spelled out explicitly) */
+uint16_t c3 = nx_crc16_compute(msg, 9,
+                               0x8005,      /* poly   */
+                               0xFFFF,      /* init   */
+                               true, true,  /* refin, refout */
+                               0x0000);     /* xorout */
+/* c3 == c1 */
+
+/* the same CRC, fed in over several chunks */
+nx_crc_ctx_t ctx;
+nx_crc_init(&ctx, 16, 0x8005, 0xFFFF, true, true, 0x0000);
+nx_crc_update(&ctx, msg, 4);                /* "1234"  */
+nx_crc_update(&ctx, msg + 4, 5);            /* "56789" */
+uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
+```
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project
