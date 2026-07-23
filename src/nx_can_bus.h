@@ -83,16 +83,18 @@ typedef struct {
     union {
         uint32_t raw;        /**< All flag bits as one word (for fast copy/compare) */
         struct {
-            uint32_t dir      : 2;  /**< Direction; one of nx_can_dir_t (TX / RX / TXR) */
-            uint32_t dlc      : 4;  /**< Data Length Code (0..15); see nx_can_dlc_to_len */
-            uint32_t is_ext   : 1;  /**< Extended (29-bit) identifier */
-            uint32_t is_remote: 1;  /**< Remote transmission request (classic CAN only) */
-            uint32_t is_fd    : 1;  /**< CAN FD frame */
-            uint32_t brs      : 1;  /**< Bit-rate switch (CAN FD) */
-            uint32_t esi      : 1;  /**< Error state indicator (CAN FD) */
-            uint32_t is_err   : 1;  /**< Error/failure frame (RX: error frame; TXR: transmit failed) */
-            uint32_t err_code : 4;  /**< Cause when is_err is set; one of nx_can_err_t */
-            uint32_t reserved : 16; /**< Reserved, keep 0 */
+            uint32_t ch        : 4;  /**< Channel number; tool-only field (like dir), identifies the CAN interface */
+            uint32_t dir       : 2;  /**< Direction; one of nx_can_dir_t (TX / RX / TXR) */
+            uint32_t reserved1 : 2;  /**< Reserved; keep 0 */
+            uint32_t dlc       : 4;  /**< Data Length Code (0..15); see nx_can_dlc_to_len */
+            uint32_t is_ext    : 1;  /**< Extended (29-bit) identifier */
+            uint32_t is_remote : 1;  /**< Remote transmission request (classic CAN only) */
+            uint32_t is_fd     : 1;  /**< CAN FD frame */
+            uint32_t brs       : 1;  /**< Bit-rate switch (CAN FD) */
+            uint32_t esi       : 1;  /**< Error state indicator (CAN FD) */
+            uint32_t is_err    : 1;  /**< Error/failure frame (RX: error frame; TXR: transmit failed) */
+            uint32_t err_code  : 4;  /**< Cause when is_err is set; one of nx_can_err_t */
+            uint32_t reserved2 : 10; /**< Reserved; keep 0 */
         } bits;
     } flags;                 /**< Frame flags */
     uint64_t timestamp;      /**< Timestamp (unit is caller-defined, e.g. microseconds) */

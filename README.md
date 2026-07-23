@@ -166,9 +166,11 @@ context.
   64 bytes). Frame attributes (`is_ext`, `is_remote`, `is_fd`, `brs`, `esi`,
   `dlc`) are packed into a bitfield that also exposes a `flags.raw` word for fast
   copy/compare.
-- **Host/tool direction** — `dir` (see `nx_can_dir_t`) distinguishes `TX` (host
-  asks the tool to send), `RX` (received from the bus), and `TXR` (the tool's
-  transmit-completion report for a prior `TX`).
+- **Host/tool direction and channel** — `dir` (see `nx_can_dir_t`) distinguishes
+  `TX` (host asks the tool to send), `RX` (received from the bus), and `TXR` (the
+  tool's transmit-completion report for a prior `TX`). `ch` is a 4-bit channel
+  number: like `dir`, it is only meaningful in a tool/adapter context, naming
+  which CAN interface the frame belongs to.
 - **Error / result reporting** — an `is_err` flag plus a 4-bit `err_code` (see
   `nx_can_err_t`) share one encoding across both directions: on an `RX` frame it
   names an error frame's cause, on a `TXR` report it names why the transmit
