@@ -296,6 +296,59 @@ nx_sha256_update(&ctx, "bc", 2);
 nx_sha256_final(&ctx, digest);
 ```
 
+### nx_modbus_rtu — Modbus RTU frame structures and CRC
+
+In-memory representations of the common Modbus RTU frames plus a table-driven
+CRC-16/MODBUS. Like `nx_can_bus`, it models the frames; unlike it, the CRC needs
+a small lookup table, so this module has a `.c` file.
+
+- **Frame structs map 1:1 onto the wire** — every struct is made of `uint8_t`
+  fields only, so it has alignment 1 and no padding, and a received byte buffer
+  can be cast directly to the matching type to parse it in place, with no packing
+  pragma. Keeping every frame field a `uint8_t` is what guarantees this — a
+  non-`uint8_t` field could introduce padding and break the 1:1 mapping.
+- **Covers the common frames** — fixed- and variable-length requests and
+  responses (`nx_modbus_rtu_req_fix_t` / `req_var_t` / `rsp_fix_t` / `rsp_var_t`)
+  plus the exception response (`nx_modbus_rtu_rsp_exc_t`). Function codes and
+  exception codes have their own enums (`nx_modbus_fc_t`, `nx_modbus_exc_t`),
+  which are transport-independent and would be shared by a future TCP module.
+- **Byte order helpers** — 16-bit fields (address, quantity, register values) are
+  big-endian on the wire; use `nx_modbus_rtu_get_u16` / `set_u16` to convert. The
+  trailing CRC is little-endian (low byte first). For the variable-length frames
+  the CRC is not a named field — `nx_modbus_rtu_req_var_crc` / `rsp_var_crc`
+  return a pointer to it after the payload.
+- **Self-contained CRC** — `nx_modbus_rtu_crc16` computes CRC-16/MODBUS from a
+  256-entry table (no dependency on `nx_crc`); `nx_modbus_rtu_set_crc` fills a
+  frame's trailing CRC and `nx_modbus_rtu_check_crc` verifies a received one.
+  Both frame helpers require a length of at least 5 (the shortest valid ADU is a
+  5-byte exception response).
+- **Header-mostly, dependency-free** — the frame structs and byte helpers are in
+  the header; only the CRC lives in the `.c`. No dependency on the other modules.
+
+```c
+#include "nx_modbus_rtu.h"
+
+/* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
+uint8_t buf[8];
+nx_modbus_rtu_req_fix_t *req = (nx_modbus_rtu_req_fix_t *)buf;
+req->addr = 1u;
+req->cmd  = NX_MODBUS_FC_READ_HOLDING_REGS;
+nx_modbus_rtu_set_u16(&req->addr_h, 0x0000u);   /* starting address */
+nx_modbus_rtu_set_u16(&req->qty_h, 10u);        /* quantity         */
+nx_modbus_rtu_set_crc(buf, sizeof(buf));        /* fill crc_l / crc_h */
+
+/* on a received frame, verify the CRC then read a 16-bit field */
+if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
+    uint16_t qty = nx_modbus_rtu_get_u16(&req->qty_h);   /* 10 */
+    (void)qty;
+}
+```
+
+> **Note:** casting a byte buffer to a frame struct relies on the all-`uint8_t`
+> layout above; the same layout is why there is no packing pragma. Multi-byte
+> fields still need `get_u16` / `set_u16` for the big-endian wire order — don't
+> read them as native `uint16_t`.
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project
