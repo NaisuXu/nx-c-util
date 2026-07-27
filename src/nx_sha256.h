@@ -84,8 +84,7 @@ void nx_sha256_final(nx_sha256_ctx_t *ctx, uint8_t digest[NX_SHA256_DIGEST_SIZE]
  * @param  digest Output buffer of at least NX_SHA256_DIGEST_SIZE bytes; if NULL,
  *                the function does nothing.
  */
-void nx_sha256(const void *data, size_t length,
-               uint8_t digest[NX_SHA256_DIGEST_SIZE]);
+void nx_sha256(const void *data, size_t length, uint8_t digest[NX_SHA256_DIGEST_SIZE]);
 
 #ifdef __cplusplus
 }

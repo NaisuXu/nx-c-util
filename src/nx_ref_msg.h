@@ -55,8 +55,9 @@ typedef enum {
     NX_REF_MSG_OK = 0,         /**< Operation succeeded */
     NX_REF_MSG_ERR_PARAM,      /**< Invalid argument (NULL pointer, etc.) */
     NX_REF_MSG_ERR_NOMEM,      /**< Memory-pool allocation failed */
-    NX_REF_MSG_ERR_FULL,       /**< Target queue is full */
-    NX_REF_MSG_ERR_STATE       /**< release() called on a message whose refcount is already 0 */
+    NX_REF_MSG_ERR_FULL,       /**< Target queue is full (single publish); or, from publish_multi, no queue accepted the message */
+    NX_REF_MSG_ERR_STATE,      /**< release() called on a message whose refcount is already 0 */
+    NX_REF_MSG_PARTIAL         /**< publish_multi: delivered to some, but not all, queues (some were full) */
 } nx_ref_msg_ret_t;
 
 /**
@@ -162,29 +163,46 @@ nx_ref_msg_ret_t nx_ref_msg_publish(nx_ref_msg_t *msg, nx_queue_t *q);
 nx_ref_msg_ret_t nx_ref_msg_release(nx_ref_msg_t *msg);
 
 /**
- * @brief  Publish the message to multiple queues in one call.
+ * @brief  Publish the message to multiple queues in one call (best-effort).
  *
  * @p queues is a NULL-terminated array: nx_ref_msg_publish is called for each
- * entry up to (but not including) the first NULL. Each successful enqueue does
- * refcount +1; a full queue is skipped and holds no reference. The queue set is
+ * entry up to (but not including) the first NULL. Delivery is best-effort: each
+ * successful enqueue does refcount +1; a full queue is skipped and holds no
+ * reference, and the remaining queues are still attempted. The queue set is
  * organized by the caller; this module keeps no subscription table.
- * @p out_delivered returns the number of successful deliveries.
+ *
+ * The return code reflects the aggregate outcome, so a caller that inspects only
+ * the return value still learns whether anything was dropped:
+ *   - all queues accepted the message (or the list is empty) -> NX_REF_MSG_OK;
+ *   - some, but not all, accepted it                          -> NX_REF_MSG_PARTIAL;
+ *   - a non-empty list where no queue accepted it             -> NX_REF_MSG_ERR_FULL.
+ *
+ * @p out_delivered (optional) receives the number of successful deliveries.
+ * @p out_first_failed (optional) receives the index of the FIRST queue that was
+ * full; when nothing failed it is set to the number of queues (i.e. one past the
+ * last valid index). For finer detail (every failing queue), call
+ * nx_ref_msg_publish per queue and inspect each return value directly.
  *
  * @warning The array MUST end with a NULL entry. Because there is no count, a
  *          missing terminator makes this function read past the end of the array
  *          (undefined behavior). Consequently NULL cannot be used as a mid-array
  *          "skip" placeholder - the first NULL ends the list.
  *
- * @param  msg           Message handle, must not be NULL.
- * @param  queues        NULL-terminated array of queue pointers, must not be NULL.
- * @param  out_delivered May be NULL; if non-NULL, receives the number of successful deliveries.
+ * @param  msg              Message handle, must not be NULL.
+ * @param  queues           NULL-terminated array of queue pointers, must not be NULL.
+ * @param  out_delivered    May be NULL; if non-NULL, receives the number of successful deliveries.
+ * @param  out_first_failed May be NULL; if non-NULL, receives the index of the first
+ *                          full queue, or the queue count if none failed.
  *
- * @return NX_REF_MSG_OK on success (including an immediately-NULL, i.e. empty, list);
+ * @return NX_REF_MSG_OK if every queue accepted the message (including an empty list);
+ *         NX_REF_MSG_PARTIAL if some but not all accepted it;
+ *         NX_REF_MSG_ERR_FULL if a non-empty list had no successful delivery;
  *         NX_REF_MSG_ERR_PARAM if msg / queues is NULL.
  */
 nx_ref_msg_ret_t nx_ref_msg_publish_multi(nx_ref_msg_t      *msg,
                                           nx_queue_t *const *queues,
-                                          size_t            *out_delivered);
+                                          size_t            *out_delivered,
+                                          size_t            *out_first_failed);
 
 #ifdef __cplusplus
 }

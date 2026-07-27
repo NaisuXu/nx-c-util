@@ -173,8 +173,7 @@ void nx_sha256_final(nx_sha256_ctx_t *ctx, uint8_t digest[NX_SHA256_DIGEST_SIZE]
     }
 }
 
-void nx_sha256(const void *data, size_t length,
-               uint8_t digest[NX_SHA256_DIGEST_SIZE])
+void nx_sha256(const void *data, size_t length, uint8_t digest[NX_SHA256_DIGEST_SIZE])
 {
     nx_sha256_ctx_t ctx;
     nx_sha256_init(&ctx);

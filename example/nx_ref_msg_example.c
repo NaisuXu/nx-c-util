@@ -110,10 +110,14 @@ int nx_ref_msg_example_run(void)
     /* NULL-terminated array: the trailing NULL marks the end of the list. */
     nx_queue_t *group[] = { &qa, &qb, &qc, NULL };
     size_t delivered = 0;
-    nx_ref_msg_publish_multi(m, group, &delivered);
-    printf("  delivered=%zu, refcount=%zu (1 producer + %zu queues)\n",
-           delivered, nx_ref_msg_refcount(m), delivered);
+    size_t first_failed = 0;
+    nx_ref_msg_ret_t pr = nx_ref_msg_publish_multi(m, group, &delivered, &first_failed);
+    printf("  delivered=%zu, refcount=%zu (1 producer + %zu queues), ret=%d\n",
+           delivered, nx_ref_msg_refcount(m), delivered, (int)pr);
+    /* All 3 accepted: ret is OK and first_failed points one past the last (== 3). */
+    assert(pr == NX_REF_MSG_OK);
     assert(delivered == 3);
+    assert(first_failed == 3);
     assert(nx_ref_msg_refcount(m) == 4);
 
     /* Producer is done: give up its own reference. */
@@ -141,7 +145,7 @@ int nx_ref_msg_example_run(void)
     printf("Example 4: publish to zero queues, no leak\n");
     nx_ref_msg_t *m2 = nx_ref_msg_alloc(&pool, sizeof(sensor_reading_t));
     nx_queue_t *none[] = { NULL };   /* immediately NULL: an empty list */
-    nx_ref_msg_publish_multi(m2, none, &delivered);
+    nx_ref_msg_publish_multi(m2, none, &delivered, NULL);
     printf("  delivered=%zu, refcount=%zu\n", delivered, nx_ref_msg_refcount(m2));
     assert(delivered == 0 && nx_ref_msg_refcount(m2) == 1);
     nx_ref_msg_release(m2);   /* producer reference -> 0, freed */

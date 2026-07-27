@@ -76,24 +76,44 @@ nx_ref_msg_ret_t nx_ref_msg_release(nx_ref_msg_t *msg)
 
 nx_ref_msg_ret_t nx_ref_msg_publish_multi(nx_ref_msg_t      *msg,
                                           nx_queue_t *const *queues,
-                                          size_t            *out_delivered)
+                                          size_t            *out_delivered,
+                                          size_t            *out_first_failed)
 {
     if (msg == NULL || queues == NULL) {
         return NX_REF_MSG_ERR_PARAM;
     }
 
-    size_t delivered = 0u;
-    /* NULL-terminated: stop at the first NULL entry. */
+    size_t total       = 0u;
+    size_t delivered   = 0u;
+    size_t first_fail  = 0u;   /* set to first failing index; stays == total if none */
+    bool   have_fail   = false;
+
+    /* NULL-terminated: stop at the first NULL entry. Best-effort: keep going
+     * after a full queue so the others still receive the message. */
     for (size_t i = 0u; queues[i] != NULL; i++) {
+        total++;
         if (nx_ref_msg_publish(msg, queues[i]) == NX_REF_MSG_OK) {
             delivered++;
+        } else if (!have_fail) {
+            /* Record only the first failure; on-full queues are REJECT, so a
+             * non-OK result here means this queue genuinely did not accept it. */
+            first_fail = i;
+            have_fail  = true;
         }
-        /* On failure (e.g. queue full): skip this queue, hold no reference. */
     }
 
     if (out_delivered != NULL) {
         *out_delivered = delivered;
     }
-    return NX_REF_MSG_OK;
+    if (out_first_failed != NULL) {
+        /* No failure -> one past the last valid index (i.e. the queue count). */
+        *out_first_failed = have_fail ? first_fail : total;
+    }
+
+    if (delivered == total) {
+        return NX_REF_MSG_OK;              /* all accepted (incl. empty list) */
+    }
+    return (delivered == 0u) ? NX_REF_MSG_ERR_FULL   /* nobody took it */
+                             : NX_REF_MSG_PARTIAL;    /* some queues were full */
 }
 
