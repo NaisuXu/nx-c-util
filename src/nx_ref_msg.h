@@ -130,6 +130,28 @@ static inline size_t nx_ref_msg_len(const nx_ref_msg_t *msg)
 }
 
 /**
+ * @brief  Shrink a message's data length; can only get smaller, never larger.
+ *
+ * Only @c len changes (no memory is freed); growing is rejected, not clamped.
+ * The block is fixed at alloc time, so this only trims the reported length.
+ *
+ * @param  msg     Message handle, must not be NULL.
+ * @param  new_len New data length; must be <= the current length.
+ *
+ * @return NX_REF_MSG_OK on success; NX_REF_MSG_ERR_PARAM if @p msg is NULL or
+ *         @p new_len exceeds the current length.
+ */
+static inline nx_ref_msg_ret_t nx_ref_msg_shrink(nx_ref_msg_t *msg, size_t new_len)
+{
+    if (msg == NULL || new_len > msg->len) {
+        return NX_REF_MSG_ERR_PARAM;   /* NULL, or an attempt to grow */
+    }
+
+    msg->len = new_len;
+    return NX_REF_MSG_OK;
+}
+
+/**
  * @brief  Return the message's current reference count. 0 for a NULL message.
  */
 static inline size_t nx_ref_msg_refcount(const nx_ref_msg_t *msg)
