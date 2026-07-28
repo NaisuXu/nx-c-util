@@ -349,6 +349,51 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 > fields still need `get_u16` / `set_u16` for the big-endian wire order — don't
 > read them as native `uint16_t`.
 
+### nx_lock — pluggable critical-section abstraction
+
+The other modules are deliberately lock-free — they keep no locks and leave
+synchronization to the caller. `nx_lock` is the recommended, portable way to
+provide it: a tiny `enter` / `exit` function-pointer pair the caller fills in
+with the primitive best suited to the target, then wraps around the short
+compound operations that need protecting (a queue push/pop, a pool alloc/free, a
+refcount change).
+
+- **Mutual exclusion, not counting** — this is `enter` / `exit` (protect a data
+  structure from a concurrent access), not `take` / `give` (wait for a resource).
+  It is a symmetric pair that must nest correctly.
+- **Save / restore for nesting** — `enter` returns an implementation-defined
+  saved state that the matching `exit` is given back. On a bare-metal MCU `enter`
+  typically saves the interrupt-enable state and disables interrupts, and `exit`
+  restores exactly that — so a critical section nested in another does not
+  wrongly re-enable interrupts on the inner exit.
+- **Header-only, zero platform dependency** — `nx_lock_enter` / `nx_lock_exit`
+  are `static inline` wrappers that just null-check and forward to the caller's
+  function pointers; the library core is unchanged and still does no locking.
+- **NULL is a no-op** — a NULL lock (or NULL `enter` / `exit`) returns 0 and does
+  nothing, so the same call sites compile to nothing on a single-threaded build.
+
+```c
+#include "nx_lock.h"
+#include "nx_queue.h"
+
+/* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
+static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
+static void      cm_exit (void *ctx, uintptr_t s) { (void)ctx; __set_PRIMASK((uint32_t)s); }
+
+static const nx_lock_t g_lock = { cm_enter, cm_exit, NULL };
+
+/* wrap the short compound operation, and only that */
+uintptr_t s = nx_lock_enter(&g_lock);
+nx_queue_push(&q, &item);
+nx_lock_exit(&g_lock, s);
+```
+
+> **Note:** keep the protected region tiny — while inside it, interrupts (or
+> preemption) are held off. Wrap only the O(1) operation, never the surrounding
+> business logic. On a strict single-producer/single-consumer `nx_queue` you may
+> not need a lock at all (see the `nx_queue` note above); on a multi-core MCU,
+> disabling interrupts guards only the local core — use a real spinlock there.
+
 ## Usage
 
 The library sources live in `src/` and can be dropped directly into your project
