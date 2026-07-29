@@ -132,6 +132,32 @@ static inline bool nx_list_is_empty(const nx_list_t *head)
 }
 
 /**
+ * @brief  Get the first node in the list.
+ *
+ * @param  head List head, must not be NULL.
+ * @return Pointer to the first node, or @p head itself if the list is empty.
+ *
+ * @note   Check nx_list_is_empty first, or compare the result against @p head.
+ */
+static inline nx_list_t *nx_list_first(const nx_list_t *head)
+{
+    return head->next;
+}
+
+/**
+ * @brief  Get the last node in the list.
+ *
+ * @param  head List head, must not be NULL.
+ * @return Pointer to the last node, or @p head itself if the list is empty.
+ *
+ * @note   Check nx_list_is_empty first, or compare the result against @p head.
+ */
+static inline nx_list_t *nx_list_last(const nx_list_t *head)
+{
+    return head->prev;
+}
+
+/**
  * @brief  Get a pointer to the structure that contains a list node.
  *
  * Given a pointer to an nx_list_t member inside a structure, this computes the
