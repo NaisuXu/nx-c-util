@@ -11,6 +11,9 @@
 /** Run the nx_queue usage examples. Returns 0 on success, non-zero on failure. */
 int nx_queue_example_run(void);
 
+/** Run the nx_ringbuf usage examples. Returns 0 on success, non-zero on failure. */
+int nx_ringbuf_example_run(void);
+
 /** Run the nx_tiered_mem_pool usage examples. Returns 0 on success, non-zero on failure. */
 int nx_tiered_mem_pool_example_run(void);
 
@@ -22,5 +25,11 @@ int nx_sha256_example_run(void);
 
 /** Run the nx_crc usage examples. Returns 0 on success, non-zero on failure. */
 int nx_crc_example_run(void);
+
+/** Run the nx_can_bus usage examples. Returns 0 on success, non-zero on failure. */
+int nx_can_bus_example_run(void);
+
+/** Run the nx_modbus_rtu usage examples. Returns 0 on success, non-zero on failure. */
+int nx_modbus_rtu_example_run(void);
 
 #endif /* NX_C_UTIL_EXAMPLES_H */

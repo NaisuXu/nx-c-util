@@ -12,15 +12,20 @@ set(NX_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 add_executable(nx_c_util_examples
     nx_c_util_examples.c
     nx_queue_example.c
+    nx_ringbuf_example.c
     nx_tiered_mem_pool_example.c
     nx_ref_msg_example.c
     nx_sha256_example.c
     nx_crc_example.c
+    nx_can_bus_example.c
+    nx_modbus_rtu_example.c
     ${NX_SRC_DIR}/nx_queue.c
+    ${NX_SRC_DIR}/nx_ringbuf.c
     ${NX_SRC_DIR}/nx_tiered_mem_pool.c
     ${NX_SRC_DIR}/nx_ref_msg.c
     ${NX_SRC_DIR}/nx_sha256.c
     ${NX_SRC_DIR}/nx_crc.c
+    ${NX_SRC_DIR}/nx_modbus_rtu.c
 )
 
 target_include_directories(nx_c_util_examples PRIVATE

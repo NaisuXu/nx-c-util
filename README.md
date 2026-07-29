@@ -52,6 +52,51 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 }
 ```
 
+### nx_ringbuf — byte-oriented ring buffer
+
+A byte-stream FIFO backed by a caller-provided buffer. Where `nx_queue` stores
+fixed-size *elements* with all-or-nothing push/pop, `nx_ringbuf` stores a raw
+*byte stream*: transfers move a variable number of bytes and may be partial. That
+is the natural fit for serial I/O (UART RX/TX) and other streaming data.
+
+- **Byte stream, partial transfers** — `write` / `read` / `peek` / `discard`
+  operate on byte counts and return how many bytes were actually moved; a write
+  that does not fully fit (or a read with fewer bytes available) transfers what
+  it can rather than failing. No overwrite of unread data.
+- **Fixed capacity** — capacity is set at init time and never grows; the whole
+  buffer is usable (no reserved slot).
+- **DMA-friendly** — `peek_linear` exposes the largest physically contiguous
+  *readable* region and `poke_linear` the largest contiguous *writable* region,
+  so a DMA engine can read from or write to the ring buffer directly; commit a
+  direct fill with `nx_ringbuf_commit`, consume a direct read with
+  `nx_ringbuf_discard`. No bounce buffer needed.
+- **SPSC-friendly** — with one writer and one reader it is naturally thread-safe
+  on a single core; other concurrent access requires caller-side locking (see
+  `nx_lock`). This module introduces no locks.
+- **Helpers** — `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`.
+
+```c
+#include "nx_ringbuf.h"
+
+uint8_t      storage[64];      /* caller-owned backing storage */
+nx_ringbuf_t rb;
+nx_ringbuf_init(&rb, storage, sizeof(storage));
+
+/* stream in; a partial write is normal when nearly full */
+size_t written = nx_ringbuf_write(&rb, "hello", 5);   /* -> 5 */
+
+char out[8];
+size_t got = nx_ringbuf_read(&rb, out, sizeof(out));  /* reads what's available */
+
+/* zero-copy DMA transmit: hand the contiguous readable region to the DMA */
+size_t seg;
+const uint8_t *src = nx_ringbuf_peek_linear(&rb, &seg);
+if (src != NULL) {
+    /* dma_send(src, seg); */
+    nx_ringbuf_discard(&rb, seg);      /* mark consumed once the DMA is done */
+}
+```
+
 ### nx_tiered_mem_pool — tiered static memory pool
 
 A deterministic, fragmentation-free replacement for `malloc`/`free`, built from
