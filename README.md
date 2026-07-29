@@ -352,72 +352,6 @@ nx_lock_exit(&g_lock, s);
 > business logic. On a strict single-producer/single-consumer `nx_queue` you may
 > not need a lock at all (see the `nx_queue` note above); on a multi-core MCU,
 > disabling interrupts guards only the local core — use a real spinlock there.
-
-## Usage
-
-The library sources live in `src/` and can be dropped directly into your project
-— just compile the `.c` files and add `src/` to your include path.
-
-The `example/` directory contains runnable usage examples for every module,
-driven through CMake so they build the same way on any platform.
-
-### Build and run the examples
-
-From the repository root:
-
-```sh
-cd example
-cmake -S . -B build
-cmake --build build
-```
-
-Then run the produced executable:
-
-- **Linux / macOS**
-
-  ```sh
-  ./build/nx_c_util_examples
-  ```
-
-- **Windows (MinGW / MSYS)**
-
-  ```sh
-  ./build/nx_c_util_examples.exe
-  ```
-
-- **Windows (Visual Studio / MSVC)** — multi-config generators place the binary
-  in a per-config subdirectory:
-
-  ```sh
-  ./build/Debug/nx_c_util_examples.exe
-  ```
-
-### Choosing a generator
-
-`cmake -S . -B build` uses your platform's default generator, which is enough in
-most cases. To pick one explicitly, pass `-G`:
-
-```sh
-# Windows, MinGW toolchain
-cmake -S . -B build -G "MinGW Makefiles"
-
-# Windows, Visual Studio 2022
-cmake -S . -B build -G "Visual Studio 17 2022"
-
-# Linux / macOS, Unix Makefiles
-cmake -S . -B build -G "Unix Makefiles"
-
-# Any platform with Ninja installed
-cmake -S . -B build -G "Ninja"
-```
-
-CMake 3.10 or newer and a C11-capable compiler (GCC, Clang, or MSVC) are
-required.
-
-## License
-
-This project is under the MIT licence, see the LICENSE file.
-
 ### nx_can_bus — CAN / CAN FD frame structures and helpers
 
 A header-only module with a generic in-memory representation of a CAN frame and
@@ -478,8 +412,8 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
 ### nx_modbus_rtu — Modbus RTU frame structures and CRC
 
 In-memory representations of the common Modbus RTU frames plus a table-driven
-CRC-16/MODBUS. Like `nx_can_bus`, it models the frames; unlike it, the CRC needs
-a small lookup table, so this module has a `.c` file.
+CRC-16/MODBUS. The frame structs map 1:1 onto the wire, and the CRC needs a
+small lookup table, so this module has a `.c` file.
 
 - **Frame structs map 1:1 onto the wire** — every struct is made of `uint8_t`
   fields only, so it has alignment 1 and no padding, and a received byte buffer
