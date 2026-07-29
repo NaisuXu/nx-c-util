@@ -2,37 +2,23 @@
  * @file    nx_ref_msg.h
  * @brief   Reference-counted messages with multi-queue publish, in pure C.
  *
- * This module builds a zero-copy message dispatch layer on top of two existing
- * components:
- *   - Memory comes from nx_tiered_mem_pool (tiered static memory pool).
- *   - Messages are delivered into nx_queue (ring buffer).
+ * A zero-copy message dispatch layer: a message is allocated once and delivered to
+ * multiple queues; what a queue stores is a pointer to the message, so consumers
+ * share the same data. Lifetime is managed by a reference count: each successful
+ * enqueue increments it, each consumer calls release() when done, and the block
+ * returns to the pool when the count hits zero.
  *
- * Core idea: a message is allocated once and may be delivered to several queues;
- * what a queue stores is a "pointer to the message object", not the message body,
- * so multiple consumers share the same data (zero copy). Lifetime is managed by a
- * reference count: each successful enqueue does +1, each consumer does release()
- * (-1) when done, and the whole block is returned to the pool when the count hits 0.
+ * Memory layout: the message header and data buffer are a single block; the data
+ * is a flexible array member aligned to max_align_t.
  *
- * To publish to several queues, the caller prepares its own array of nx_queue_t*
- * and uses publish_multi to deliver in one shot - the queue set is organized by
- * the caller; this module keeps no subscription table.
+ * Reference-count convention:
+ *   - alloc() returns a message with refcount 1 (the producer reference).
+ *   - Each successful publish increments the refcount.
+ *   - After publishing, the producer calls release() once to drop its reference.
+ *   - A message delivered to no queue still reaches refcount 0 and is freed.
  *
- * Memory layout: the message header and the data buffer are a single block from
- * one alloc; the data is a flexible array member right after the header, aligned
- * to max_align_t so it can safely hold any type.
- *
- * Reference-count convention (important):
- *   - The message returned by nx_ref_msg_alloc() has refcount 1, the "producer
- *     reference".
- *   - Each successful publish (enqueue) does refcount +1.
- *   - After publishing, the producer should release() the message once to give up
- *     its own reference.
- *   - This way, even a message delivered to no queue (0 subscribers) still reaches
- *     0 and is freed, with no leak.
- *
- * Thread safety: this module introduces no locks; the reference count is a plain
- * counter (not atomic). Concurrent access to the same message must be serialized
- * by the caller, consistent with nx_queue / nx_tiered_mem_pool.
+ * Thread safety: the reference count is a plain counter (not atomic). Concurrent
+ * access to the same message must be serialized by the caller.
  */
 #ifndef NX_REF_MSG_H
 #define NX_REF_MSG_H

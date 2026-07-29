@@ -22,8 +22,7 @@
  *     @c addr up to (but not including) the CRC, or use nx_modbus_rtu_set_crc /
  *     nx_modbus_rtu_check_crc to fill or verify a whole frame's CRC.
  *
- * The CRC is table-driven and self-contained, so this module has no dependency
- * on nx_crc (or any other module), like nx_can_bus.h.
+ * The CRC is table-driven and self-contained.
  */
 #ifndef NX_MODBUS_RTU_H
 #define NX_MODBUS_RTU_H

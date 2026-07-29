@@ -3,9 +3,8 @@
  * @brief   Table-driven CRC-16/MODBUS and frame CRC helpers for nx_modbus_rtu.
  *
  * Self-contained: the 256-entry lookup table lives here as a single static const
- * (one copy in the whole program), so this module needs no dependency on nx_crc.
- * The table encodes CRC-16/MODBUS (poly 0x8005 reflected, init 0xFFFF,
- * refin/refout true, xorout 0), identical to nx_crc16_modbus.
+ * (one copy in the whole program). The table encodes CRC-16/MODBUS (poly 0x8005
+ * reflected, init 0xFFFF, refin/refout true, xorout 0).
  */
 #include "nx_modbus_rtu.h"
 

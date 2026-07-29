@@ -21,8 +21,8 @@
  *     the ring buffer directly without a bounce buffer.
  *   - In a single-producer/single-consumer scenario (one side only writes, the
  *     other only reads) it is naturally thread-safe on a single core; other
- *     concurrent scenarios require the caller to add its own locking (see
- *     nx_lock.h). This module introduces no locks.
+ *     concurrent scenarios require the caller to add its own locking. This module
+ *     introduces no locks.
  */
 #ifndef NX_RINGBUF_H
 #define NX_RINGBUF_H

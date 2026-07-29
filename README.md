@@ -148,11 +148,10 @@ nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from 
 
 ### nx_ref_msg — reference-counted zero-copy messages
 
-A message dispatch layer built on top of the two modules above: a message is
-allocated once from an `nx_tiered_mem_pool` and delivered to one or more
-`nx_queue`s. What a queue stores is a *pointer* to the message, not a copy, so
-every consumer shares the same data — zero copy. A reference count decides when
-the block goes back to the pool.
+A message dispatch layer: a message is allocated once from a memory pool and
+delivered to one or more queues. What a queue stores is a *pointer* to the
+message, not a copy, so every consumer shares the same data — zero copy. A
+reference count decides when the block goes back to the pool.
 
 - **Single allocation** — the message header and its data are one contiguous
   block (the data is a flexible array member, aligned to `max_align_t`), so
