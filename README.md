@@ -17,6 +17,57 @@ Every component follows the same design philosophy:
 
 ## Modules
 
+### nx_list — intrusive doubly-linked circular list
+
+A header-only intrusive list (Linux `list_head` style). Where `nx_queue` tracks
+standalone elements by copying them, `nx_list` embeds a link node directly in
+the user's struct, so adding an item to the list only moves pointers — no copy,
+no allocation, and the user struct stays exactly where it was allocated. A
+doubly-linked circular layout (the sentinel head forms a ring) means inserts and
+deletes have no head/tail special cases.
+
+- **Intrusive** — the user embeds `nx_list_t` in their struct; `nx_list_entry`
+  (a `container_of` macro) recovers the containing struct from the link.
+- **Doubly-linked circular** — a sentinel head's `next` points to the first real
+  node and `prev` to the last, forming a ring. Empty is `head->next == head`.
+- **Symmetric add/del** — insert after any position with `nx_list_add`; delete a
+  node from anywhere without knowing the head. Head and tail insertion are
+  trivial wrappers (`nx_list_add_head` / `nx_list_add_tail`).
+- **Safe iteration** — `nx_list_for_each` for read-only traversal,
+  `nx_list_for_each_safe` for deletion during iteration (saves `next` before
+  invoking the body, so the current node can be deleted without breaking the
+  loop).
+- **Zero allocation** — every node lives in the caller's storage; the list
+  itself is just link pointers.
+- **Header-only** — all operations are `static inline`.
+
+```c
+#include "nx_list.h"
+
+typedef struct task {
+    int         id;
+    const char *name;
+    nx_list_t   link;       /* embedded link node */
+} task_t;
+
+nx_list_t head;
+nx_list_init(&head);
+
+task_t t1 = {1, "Init", {NULL, NULL}};
+task_t t2 = {2, "Run",  {NULL, NULL}};
+
+nx_list_add_tail(&head, &t1.link);   /* add at tail */
+nx_list_add_tail(&head, &t2.link);
+
+nx_list_t *pos;
+nx_list_for_each(pos, &head) {
+    task_t *t = nx_list_entry(pos, task_t, link);   /* recover containing struct */
+    printf("Task %d: %s\n", t->id, t->name);
+}
+
+nx_list_del(&t1.link);   /* remove from anywhere */
+```
+
 ### nx_queue — generic ring-buffer (FIFO) queue
 
 A fixed-capacity FIFO queue backed by a caller-provided buffer.
@@ -51,6 +102,7 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
     /* drains 0, 1, 2, 3 in FIFO order */
 }
 ```
+
 
 ### nx_ringbuf — byte-oriented ring buffer
 
@@ -96,6 +148,7 @@ if (src != NULL) {
     nx_ringbuf_discard(&rb, seg);      /* mark consumed once the DMA is done */
 }
 ```
+
 
 ### nx_tiered_mem_pool — tiered static memory pool
 
@@ -145,6 +198,7 @@ void *p = nx_tiered_mem_pool_alloc(&pool, 20);     /* served by the 32-byte tier
 /* ... use p ... */
 nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from address */
 ```
+
 
 ### nx_ref_msg — reference-counted zero-copy messages
 
@@ -203,6 +257,167 @@ if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
 }
 ```
 
+### nx_timer — software timer manager
+
+A tick-based software timer manager built on `nx_list`. The caller drives it: a
+monotonically increasing tick counter advances (from a hardware timer, RTOS
+tick, or the main loop), and `nx_timer_process(mgr, now)` is called periodically
+to fire whichever timers have expired. This module touches no hardware and
+allocates nothing, so it works the same on bare metal, under an RTOS, or on a
+PC.
+
+- **Tick unit is caller-defined** — a tick is not milliseconds; whatever your
+  source counts in (1 ms SysTick, 10 ms RTOS tick, microseconds on a PC) is the
+  unit of every delay/period. `nx_timer_start(t, 100, 0)` means "fire 100 ticks
+  from now".
+- **One-shot and periodic** — a timer with `period = 0` fires once and stops; a
+  timer with `period != 0` reloads and fires again every `period` ticks.
+- **Callback context** — callbacks run inside `nx_timer_process`. Where you call
+  it decides their context: call from the main loop for relaxed callbacks, or
+  from the tick interrupt for tighter latency (then keep callbacks very short).
+- **Overflow-safe** — ticks are `uint32_t` and wrap around; expiry is compared
+  with a signed difference, so wrap is handled correctly as long as no single
+  timer's delay or period exceeds `INT32_MAX` ticks (~24.8 days at 1 ms tick).
+- **Zero allocation** — every timer lives in caller-owned storage; they are
+  tracked on an intrusive list.
+- **Not thread-safe** — serialize access yourself if timers are started/stopped
+  from a different context than `process`.
+
+```c
+#include "nx_timer.h"
+
+static void led_blink(nx_timer_t *t, void *arg) {
+    int *state = (int *)arg;
+    *state = !(*state);
+    printf("LED %s\n", *state ? "ON" : "OFF");
+}
+
+nx_timer_mgr_t mgr;
+nx_timer_t     timer;
+int            led_state = 0;
+
+nx_timer_mgr_init(&mgr);
+nx_timer_init(&timer, led_blink, &led_state);
+
+/* blink every 10 ticks, starting immediately */
+nx_timer_start(&mgr, &timer, 0, 10);
+
+/* in your tick ISR or main loop: */
+for (uint32_t tick = 0; tick < 100; tick++) {
+    nx_timer_process(&mgr, tick);   /* fires the callback at tick 0, 10, 20, ... */
+}
+```
+
+### nx_lock — pluggable critical-section abstraction
+
+The other modules are deliberately lock-free — they keep no locks and leave
+synchronization to the caller. `nx_lock` is the recommended, portable way to
+provide it: a tiny `enter` / `exit` function-pointer pair the caller fills in
+with the primitive best suited to the target, then wraps around the short
+compound operations that need protecting (a queue push/pop, a pool alloc/free, a
+refcount change).
+
+- **Mutual exclusion, not counting** — this is `enter` / `exit` (protect a data
+  structure from a concurrent access), not `take` / `give` (wait for a resource).
+  It is a symmetric pair that must nest correctly.
+- **Save / restore for nesting** — `enter` returns an implementation-defined
+  saved state that the matching `exit` is given back. On a bare-metal MCU `enter`
+  typically saves the interrupt-enable state and disables interrupts, and `exit`
+  restores exactly that — so a critical section nested in another does not
+  wrongly re-enable interrupts on the inner exit.
+- **Header-only, zero platform dependency** — `nx_lock_enter` / `nx_lock_exit`
+  are `static inline` wrappers that just null-check and forward to the caller's
+  function pointers; the library core is unchanged and still does no locking.
+- **NULL is a no-op** — a NULL lock (or NULL `enter` / `exit`) returns 0 and does
+  nothing, so the same call sites compile to nothing on a single-threaded build.
+
+```c
+#include "nx_lock.h"
+#include "nx_queue.h"
+
+/* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
+static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
+static void      cm_exit (void *ctx, uintptr_t s) { (void)ctx; __set_PRIMASK((uint32_t)s); }
+
+static const nx_lock_t g_lock = { cm_enter, cm_exit, NULL };
+
+/* wrap the short compound operation, and only that */
+uintptr_t s = nx_lock_enter(&g_lock);
+nx_queue_push(&q, &item);
+nx_lock_exit(&g_lock, s);
+```
+
+> **Note:** keep the protected region tiny — while inside it, interrupts (or
+> preemption) are held off. Wrap only the O(1) operation, never the surrounding
+> business logic. On a strict single-producer/single-consumer `nx_queue` you may
+> not need a lock at all (see the `nx_queue` note above); on a multi-core MCU,
+> disabling interrupts guards only the local core — use a real spinlock there.
+
+## Usage
+
+The library sources live in `src/` and can be dropped directly into your project
+— just compile the `.c` files and add `src/` to your include path.
+
+The `example/` directory contains runnable usage examples for every module,
+driven through CMake so they build the same way on any platform.
+
+### Build and run the examples
+
+From the repository root:
+
+```sh
+cd example
+cmake -S . -B build
+cmake --build build
+```
+
+Then run the produced executable:
+
+- **Linux / macOS**
+
+  ```sh
+  ./build/nx_c_util_examples
+  ```
+
+- **Windows (MinGW / MSYS)**
+
+  ```sh
+  ./build/nx_c_util_examples.exe
+  ```
+
+- **Windows (Visual Studio / MSVC)** — multi-config generators place the binary
+  in a per-config subdirectory:
+
+  ```sh
+  ./build/Debug/nx_c_util_examples.exe
+  ```
+
+### Choosing a generator
+
+`cmake -S . -B build` uses your platform's default generator, which is enough in
+most cases. To pick one explicitly, pass `-G`:
+
+```sh
+# Windows, MinGW toolchain
+cmake -S . -B build -G "MinGW Makefiles"
+
+# Windows, Visual Studio 2022
+cmake -S . -B build -G "Visual Studio 17 2022"
+
+# Linux / macOS, Unix Makefiles
+cmake -S . -B build -G "Unix Makefiles"
+
+# Any platform with Ninja installed
+cmake -S . -B build -G "Ninja"
+```
+
+CMake 3.10 or newer and a C11-capable compiler (GCC, Clang, or MSVC) are
+required.
+
+## License
+
+This project is under the MIT licence, see the LICENSE file.
+
 ### nx_can_bus — CAN / CAN FD frame structures and helpers
 
 A header-only module with a generic in-memory representation of a CAN frame and
@@ -259,86 +474,6 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
 > serialize `flags.raw` (or pack fields explicitly) rather than memcpy'ing the
 > struct.
 
-### nx_crc — CRC-8 / CRC-16 / CRC-32 checksums
-
-Bit-wise CRC routines with no lookup tables, so there is nothing to size or
-store and every call is deterministic.
-
-- **Three layers** — named wrappers for the common standards; generic one-shot
-  functions (`nx_crc8_compute` / `nx_crc16_compute` / `nx_crc32_compute`) taking
-  the Rocksoft model parameters (polynomial, init, input/output reflection,
-  final XOR) for any variant; and an incremental context API
-  (`nx_crc_init` / `nx_crc_update` / `nx_crc_final`) for data that arrives in
-  pieces — a chunked computation yields exactly the same result as the one-shot
-  call.
-- **Standard variants included** — CRC-8, CRC-8/ITU, CRC-8/ROHC, CRC-8/MAXIM;
-  CRC-16 IBM/MAXIM/USB/MODBUS/CCITT/CCITT-FALSE/X25/XMODEM; CRC-32 and
-  CRC-32/MPEG-2. Each is documented in the header with its parameters and its
-  check value (the CRC of `"123456789"`).
-- **Table-free** — a single bit-wise core handles every width and refin/refout
-  combination, so no polynomial tables are compiled in; small code, no table RAM.
-- **NULL-safe** — a NULL data pointer contributes no bytes (treated as a
-  zero-length buffer) instead of dereferencing, and a NULL context is a no-op;
-  storage is caller-owned and the library uses no dynamic memory.
-
-```c
-#include "nx_crc.h"
-
-const char *msg = "123456789";
-
-/* a named standard variant */
-uint16_t c1 = nx_crc16_modbus(msg, 9);      /* 0x4B37 */
-uint32_t c2 = nx_crc32(msg, 9);             /* 0xCBF43926 */
-
-/* any other variant via the generic function
- * (here: CRC-16/MODBUS spelled out explicitly) */
-uint16_t c3 = nx_crc16_compute(msg, 9,
-                               0x8005,      /* poly   */
-                               0xFFFF,      /* init   */
-                               true, true,  /* refin, refout */
-                               0x0000);     /* xorout */
-/* c3 == c1 */
-
-/* the same CRC, fed in over several chunks */
-nx_crc_ctx_t ctx;
-nx_crc_init(&ctx, 16, 0x8005, 0xFFFF, true, true, 0x0000);
-nx_crc_update(&ctx, msg, 4);                /* "1234"  */
-nx_crc_update(&ctx, msg + 4, 5);            /* "56789" */
-uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
-```
-
-### nx_sha256 — SHA-256 cryptographic hash
-
-A pure-C SHA-256 (FIPS 180-4) implementation producing a 32-byte digest.
-
-- **Two ways to hash** — a one-shot helper (`nx_sha256`) for a whole buffer, and
-  an incremental context API (`nx_sha256_init` / `nx_sha256_update` /
-  `nx_sha256_final`) for data that arrives in pieces; a chunked computation
-  yields exactly the same digest as the one-shot call.
-- **Fixed, caller-owned storage** — the running state is a single
-  `nx_sha256_ctx_t` the caller places on the stack; no dynamic memory, no tables
-  beyond the fixed round constants, fully deterministic.
-- **NULL-safe** — a NULL data pointer contributes no bytes and a NULL context or
-  digest pointer is a harmless no-op.
-- **Plain hash, not a MAC** — for message authentication, build HMAC-SHA256 on
-  top of it.
-
-```c
-#include "nx_sha256.h"
-
-uint8_t digest[NX_SHA256_DIGEST_SIZE];
-
-/* one-shot */
-nx_sha256("abc", 3, digest);
-/* digest = ba7816bf 8f01cfea ... f20015ad */
-
-/* the same digest, fed in over several chunks */
-nx_sha256_ctx_t ctx;
-nx_sha256_init(&ctx);
-nx_sha256_update(&ctx, "a", 1);
-nx_sha256_update(&ctx, "bc", 2);
-nx_sha256_final(&ctx, digest);
-```
 
 ### nx_modbus_rtu — Modbus RTU frame structures and CRC
 
@@ -393,50 +528,89 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 > fields still need `get_u16` / `set_u16` for the big-endian wire order — don't
 > read them as native `uint16_t`.
 
-### nx_lock — pluggable critical-section abstraction
 
-The other modules are deliberately lock-free — they keep no locks and leave
-synchronization to the caller. `nx_lock` is the recommended, portable way to
-provide it: a tiny `enter` / `exit` function-pointer pair the caller fills in
-with the primitive best suited to the target, then wraps around the short
-compound operations that need protecting (a queue push/pop, a pool alloc/free, a
-refcount change).
+### nx_crc — CRC-8 / CRC-16 / CRC-32 checksums
 
-- **Mutual exclusion, not counting** — this is `enter` / `exit` (protect a data
-  structure from a concurrent access), not `take` / `give` (wait for a resource).
-  It is a symmetric pair that must nest correctly.
-- **Save / restore for nesting** — `enter` returns an implementation-defined
-  saved state that the matching `exit` is given back. On a bare-metal MCU `enter`
-  typically saves the interrupt-enable state and disables interrupts, and `exit`
-  restores exactly that — so a critical section nested in another does not
-  wrongly re-enable interrupts on the inner exit.
-- **Header-only, zero platform dependency** — `nx_lock_enter` / `nx_lock_exit`
-  are `static inline` wrappers that just null-check and forward to the caller's
-  function pointers; the library core is unchanged and still does no locking.
-- **NULL is a no-op** — a NULL lock (or NULL `enter` / `exit`) returns 0 and does
-  nothing, so the same call sites compile to nothing on a single-threaded build.
+Bit-wise CRC routines with no lookup tables, so there is nothing to size or
+store and every call is deterministic.
+
+- **Three layers** — named wrappers for the common standards; generic one-shot
+  functions (`nx_crc8_compute` / `nx_crc16_compute` / `nx_crc32_compute`) taking
+  the Rocksoft model parameters (polynomial, init, input/output reflection,
+  final XOR) for any variant; and an incremental context API
+  (`nx_crc_init` / `nx_crc_update` / `nx_crc_final`) for data that arrives in
+  pieces — a chunked computation yields exactly the same result as the one-shot
+  call.
+- **Standard variants included** — CRC-8, CRC-8/ITU, CRC-8/ROHC, CRC-8/MAXIM;
+  CRC-16 IBM/MAXIM/USB/MODBUS/CCITT/CCITT-FALSE/X25/XMODEM; CRC-32 and
+  CRC-32/MPEG-2. Each is documented in the header with its parameters and its
+  check value (the CRC of `"123456789"`).
+- **Table-free** — a single bit-wise core handles every width and refin/refout
+  combination, so no polynomial tables are compiled in; small code, no table RAM.
+- **NULL-safe** — a NULL data pointer contributes no bytes (treated as a
+  zero-length buffer) instead of dereferencing, and a NULL context is a no-op;
+  storage is caller-owned and the library uses no dynamic memory.
 
 ```c
-#include "nx_lock.h"
-#include "nx_queue.h"
+#include "nx_crc.h"
 
-/* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
-static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
-static void      cm_exit (void *ctx, uintptr_t s) { (void)ctx; __set_PRIMASK((uint32_t)s); }
+const char *msg = "123456789";
 
-static const nx_lock_t g_lock = { cm_enter, cm_exit, NULL };
+/* a named standard variant */
+uint16_t c1 = nx_crc16_modbus(msg, 9);      /* 0x4B37 */
+uint32_t c2 = nx_crc32(msg, 9);             /* 0xCBF43926 */
 
-/* wrap the short compound operation, and only that */
-uintptr_t s = nx_lock_enter(&g_lock);
-nx_queue_push(&q, &item);
-nx_lock_exit(&g_lock, s);
+/* any other variant via the generic function
+ * (here: CRC-16/MODBUS spelled out explicitly) */
+uint16_t c3 = nx_crc16_compute(msg, 9,
+                               0x8005,      /* poly   */
+                               0xFFFF,      /* init   */
+                               true, true,  /* refin, refout */
+                               0x0000);     /* xorout */
+/* c3 == c1 */
+
+/* the same CRC, fed in over several chunks */
+nx_crc_ctx_t ctx;
+nx_crc_init(&ctx, 16, 0x8005, 0xFFFF, true, true, 0x0000);
+nx_crc_update(&ctx, msg, 4);                /* "1234"  */
+nx_crc_update(&ctx, msg + 4, 5);            /* "56789" */
+uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
 ```
 
-> **Note:** keep the protected region tiny — while inside it, interrupts (or
-> preemption) are held off. Wrap only the O(1) operation, never the surrounding
-> business logic. On a strict single-producer/single-consumer `nx_queue` you may
-> not need a lock at all (see the `nx_queue` note above); on a multi-core MCU,
-> disabling interrupts guards only the local core — use a real spinlock there.
+
+### nx_sha256 — SHA-256 cryptographic hash
+
+A pure-C SHA-256 (FIPS 180-4) implementation producing a 32-byte digest.
+
+- **Two ways to hash** — a one-shot helper (`nx_sha256`) for a whole buffer, and
+  an incremental context API (`nx_sha256_init` / `nx_sha256_update` /
+  `nx_sha256_final`) for data that arrives in pieces; a chunked computation
+  yields exactly the same digest as the one-shot call.
+- **Fixed, caller-owned storage** — the running state is a single
+  `nx_sha256_ctx_t` the caller places on the stack; no dynamic memory, no tables
+  beyond the fixed round constants, fully deterministic.
+- **NULL-safe** — a NULL data pointer contributes no bytes and a NULL context or
+  digest pointer is a harmless no-op.
+- **Plain hash, not a MAC** — for message authentication, build HMAC-SHA256 on
+  top of it.
+
+```c
+#include "nx_sha256.h"
+
+uint8_t digest[NX_SHA256_DIGEST_SIZE];
+
+/* one-shot */
+nx_sha256("abc", 3, digest);
+/* digest = ba7816bf 8f01cfea ... f20015ad */
+
+/* the same digest, fed in over several chunks */
+nx_sha256_ctx_t ctx;
+nx_sha256_init(&ctx);
+nx_sha256_update(&ctx, "a", 1);
+nx_sha256_update(&ctx, "bc", 2);
+nx_sha256_final(&ctx, digest);
+```
+
 
 ## Usage
 
