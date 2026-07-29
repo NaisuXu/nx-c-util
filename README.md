@@ -1,5 +1,7 @@
 # nx-c-util
 
+[简体中文](/README_CN.md) | [English](/README.md)
+
 ## Brief
 
 A utility library implemented in pure C, designed to provide simple and
