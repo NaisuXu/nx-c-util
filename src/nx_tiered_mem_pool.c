@@ -10,26 +10,35 @@
 /* Round n up to a multiple of the power-of-two alignment a. */
 #define NX_TIERED_ALIGN_UP(n, a)  (((n) + (a) - 1u) & ~((size_t)(a) - 1u))
 
-/**
- * @brief Build the intrusive free list for a single tier and reset its counters.
- *
- * Blocks are chained in address order; each free block stores the address of
- * the next free block in its first sizeof(void*) bytes.
- */
-static void nx_tiered_tier_build_freelist(nx_tiered_level_t *t)
+/** Test whether block @p idx is currently in use (bit set). */
+static inline bool nx_tiered_bit_used(const nx_tiered_level_t *t, size_t idx)
 {
-    void *head = NULL;
+    return (t->used[idx >> 3] & (uint8_t)(1u << (idx & 7u))) != 0u;
+}
 
-    /* Chain from the last block back to the first so the head ends up at base. */
-    for (size_t i = t->block_count; i > 0u; i--) {
-        void *block = t->base + (i - 1u) * t->block_size;
-        *(void **)block = head;
-        head = block;
+/** Mark block @p idx as in use. */
+static inline void nx_tiered_bit_set(nx_tiered_level_t *t, size_t idx)
+{
+    t->used[idx >> 3] |= (uint8_t)(1u << (idx & 7u));
+}
+
+/** Mark block @p idx as free. */
+static inline void nx_tiered_bit_clear(nx_tiered_level_t *t, size_t idx)
+{
+    t->used[idx >> 3] &= (uint8_t)~(1u << (idx & 7u));
+}
+
+/**
+ * @brief Reset a tier to "all free": clear the in-use bitmap and reset counters.
+ */
+static void nx_tiered_tier_reset(nx_tiered_level_t *t)
+{
+    for (size_t i = 0u; i < NX_TIERED_MEM_POOL_BITMAP_BYTES; i++) {
+        t->used[i] = 0u;
     }
-
-    t->free_list      = head;
     t->free_count     = t->block_count;
     t->min_free_count = t->block_count;
+    t->next_free_hint = 0u;
 }
 
 /**
@@ -45,7 +54,9 @@ static nx_tiered_ret_t nx_tiered_tier_setup(nx_tiered_level_t           *t,
                                         const nx_tiered_level_cfg_t *cfg,
                                         uint8_t                  *base)
 {
-    if (cfg->block_count == 0u || cfg->block_size < sizeof(void *)) {
+    if (cfg->block_count == 0u ||
+        cfg->block_count > NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER ||
+        cfg->block_size == 0u) {
         return NX_TIERED_ERR_CONFIG;
     }
 
@@ -56,7 +67,7 @@ static nx_tiered_ret_t nx_tiered_tier_setup(nx_tiered_level_t           *t,
     t->block_count = cfg->block_count;
     t->end         = base + block_size * cfg->block_count;
 
-    nx_tiered_tier_build_freelist(t);
+    nx_tiered_tier_reset(t);
 
     return NX_TIERED_OK;
 }
@@ -72,7 +83,9 @@ static nx_tiered_ret_t nx_tiered_tier_setup(nx_tiered_level_t           *t,
 static nx_tiered_ret_t nx_tiered_tier_bytes(const nx_tiered_level_cfg_t *cfg,
                                         size_t                   *out_bytes)
 {
-    if (cfg->block_count == 0u || cfg->block_size < sizeof(void *)) {
+    if (cfg->block_count == 0u ||
+        cfg->block_count > NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER ||
+        cfg->block_size == 0u) {
         return NX_TIERED_ERR_CONFIG;
     }
 
@@ -120,18 +133,18 @@ nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
         *out_required_bytes = required;
     }
 
-    /* The whole buffer must be aligned so every tier's and every block's start
-     * address is aligned too. */
-    if (((uintptr_t)cfg->memory % NX_TIERED_ALIGN) != 0u) {
-        return NX_TIERED_ERR_CONFIG;
-    }
-    if (cfg->memory_size < required) {
+    /* Align the working base up (buffer need not be aligned), costing at most
+     * NX_TIERED_ALIGN - 1 padding bytes, which the buffer must have room for. */
+    uintptr_t raw     = (uintptr_t)cfg->memory;
+    uintptr_t aligned = (raw + (NX_TIERED_ALIGN - 1u)) & ~((uintptr_t)NX_TIERED_ALIGN - 1u);
+    size_t    padding = (size_t)(aligned - raw);
+    if (cfg->memory_size < padding || (cfg->memory_size - padding) < required) {
         return NX_TIERED_ERR_CONFIG;   /* buffer too small; required already reported */
     }
 
     /* Second pass: carve the buffer among the tiers, insertion-sorting them by
      * ascending block size. */
-    uint8_t *cursor = (uint8_t *)cfg->memory;
+    uint8_t *cursor = (uint8_t *)aligned;
 
     pool->tier_count      = 0u;
     pool->forbid_fallback = cfg->forbid_fallback;
@@ -161,46 +174,47 @@ void *nx_tiered_mem_pool_alloc(nx_tiered_mem_pool_t *pool, size_t size)
         return NULL;
     }
 
-    /* Tiers are sorted ascending, so the first tier that is both large enough
-     * and has a free block is the best available fit (and this naturally falls
-     * back to larger tiers).
-     *
-     * When forbid_fallback is true, borrowing from a "larger" tier is not
-     * allowed: only tiers whose block size equals the ideal tier's (the first
-     * tier with block_size >= size) may be used; once a tier's block size
-     * exceeds the ideal size, the search stops and NULL is returned. Note that
-     * multiple tiers sharing the same block size are equivalent, not "larger",
-     * so they may still be used interchangeably. */
+    /* Tiers are sorted ascending: the first large-enough tier with a free block
+     * is the best fit, which naturally falls back to larger tiers. With
+     * forbid_fallback, the search stops once block_size exceeds the ideal tier's
+     * (equal-size tiers are equivalent, not "larger", so they stay usable). */
     size_t ideal_block_size = 0u;
 
     for (size_t i = 0u; i < pool->tier_count; i++) {
         nx_tiered_level_t *t = &pool->tiers[i];
         if (t->block_size < size) {
-            continue;   /* block too small, skip */
+            continue;
         }
-
-        /* Record the ideal tier's block size (the first large-enough tier). */
         if (ideal_block_size == 0u) {
             ideal_block_size = t->block_size;
         }
-
-        /* Fallback forbidden: block size already exceeds the ideal tier, do not
-         * borrow from a larger tier. */
         if (pool->forbid_fallback && t->block_size > ideal_block_size) {
             break;
         }
-
-        if (t->free_list == NULL) {
-            continue;   /* this tier is exhausted; try the next same-size tier (or fall back to a larger one) */
+        if (t->free_count == 0u) {
+            continue;
         }
 
-        void *block = t->free_list;
-        t->free_list = *(void **)block;   /* pop the head */
+        /* Scan from the rolling hint for a free block; free_count > 0 guarantees
+         * one exists, so this terminates. */
+        size_t idx = t->next_free_hint;
+        for (size_t scanned = 0u; scanned < t->block_count; scanned++) {
+            if (idx >= t->block_count) {
+                idx = 0u;
+            }
+            if (!nx_tiered_bit_used(t, idx)) {
+                break;
+            }
+            idx++;
+        }
+
+        nx_tiered_bit_set(t, idx);
+        t->next_free_hint = idx + 1u;
         t->free_count--;
         if (t->free_count < t->min_free_count) {
             t->min_free_count = t->free_count;
         }
-        return block;
+        return t->base + idx * t->block_size;
     }
 
     return NULL;
@@ -225,12 +239,18 @@ nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr)
         }
 
         /* Must land exactly on a block boundary, otherwise the pointer is invalid. */
-        if (((size_t)(p - t->base) % t->block_size) != 0u) {
+        size_t offset = (size_t)(p - t->base);
+        if ((offset % t->block_size) != 0u) {
             return NX_TIERED_ERR_INVALID;
         }
+        size_t idx = offset / t->block_size;
 
-        *(void **)ptr = t->free_list;   /* push back onto the free list */
-        t->free_list = ptr;
+        /* A clear bit means the block is already free: reject the double free. */
+        if (!nx_tiered_bit_used(t, idx)) {
+            return NX_TIERED_ERR_DOUBLE_FREE;
+        }
+
+        nx_tiered_bit_clear(t, idx);
         t->free_count++;
         return NX_TIERED_OK;
     }

@@ -5,24 +5,21 @@
  * Design goals: aimed at embedded development, as a deterministic replacement
  * for malloc/free - simple, predictable, fragmentation-free, heap-free.
  *
- * The pool consists of several "tiers", each a batch of equally sized blocks.
- * The caller only provides one aligned static buffer; at init time the pool
- * carves it into several regions according to the per-tier config. An allocation
- * request is rounded up to the smallest tier whose block is large enough, and a
- * block is taken from that tier's free list; if that tier is exhausted, it falls
- * back to a larger tier. Both allocation and free are O(1).
+ * The pool consists of several "tiers", each a batch of equally sized blocks
+ * carved from one caller-provided buffer. An allocation is rounded up to the
+ * smallest tier large enough; a free block in that tier is found via its in-use
+ * bitmap, falling back to a larger tier when exhausted. Free is O(1); alloc scans
+ * a small per-tier bitmap.
  *
  * Features:
- *   - Purely static: all storage is provided by the caller as one buffer; this
- *     library uses no dynamic memory and does not depend on malloc/free.
- *   - Deterministic: allocation/free run in constant time, no fragmentation
- *     within a tier.
- *   - Zero per-block overhead: on free, the pointer is mapped back to its owning
- *     tier by address range; blocks carry no header of their own.
- *   - Exhaustion fallback: when the ideal tier is full, a larger tier is used
- *     automatically.
- *   - Not thread-safe: concurrent access must be locked by the caller (this
- *     library introduces no locks).
+ *   - Purely static: no dynamic memory, no malloc/free; the caller owns the buffer.
+ *   - Deterministic: bounded, predictable timing; no fragmentation within a tier.
+ *   - Zero per-block overhead: blocks carry no header (the owning tier is found by
+ *     address range, and an in-use bitmap lives in the pool handle), so block
+ *     sizes down to a single alignment unit are allowed.
+ *   - Built-in double-free detection via the bitmap, at no extra cost.
+ *   - Exhaustion fallback to a larger tier (optional).
+ *   - Not thread-safe: concurrent access must be locked by the caller.
  */
 #ifndef NX_TIERED_MEM_POOL_H
 #define NX_TIERED_MEM_POOL_H
@@ -35,15 +32,19 @@
 extern "C" {
 #endif
 
-/**
- * @brief Maximum number of tiers a single pool can hold.
- *
- * Define this macro before including this header (or via the build system) to
- * override the default.
- */
+/** Maximum tiers per pool. Override before including this header. */
 #ifndef NX_TIERED_MEM_POOL_MAX_TIERS
 #define NX_TIERED_MEM_POOL_MAX_TIERS 4
 #endif
+
+/** Maximum blocks per tier (bounds the per-tier in-use bitmap). Override before including. */
+#ifndef NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER
+#define NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER 64
+#endif
+
+/** Bitmap bytes needed to track NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER blocks. */
+#define NX_TIERED_MEM_POOL_BITMAP_BYTES \
+    (((NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER) + 7u) / 8u)
 
 /**
  * @brief Return codes for pool operations.
@@ -51,9 +52,9 @@ extern "C" {
 typedef enum {
     NX_TIERED_OK = 0,        /**< Operation succeeded */
     NX_TIERED_ERR_PARAM,     /**< Invalid argument (NULL pointer, etc.) */
-    NX_TIERED_ERR_CONFIG,    /**< Invalid tier config: block too small, count is 0, buffer not aligned, or too many tiers */
-    NX_TIERED_ERR_NOMEM,     /**< Allocation failed: every large-enough tier is exhausted */
-    NX_TIERED_ERR_INVALID    /**< Freed a pointer that this pool does not own */
+    NX_TIERED_ERR_CONFIG,    /**< Invalid config: bad tier, too many tiers, or buffer too small */
+    NX_TIERED_ERR_INVALID,   /**< Freed a pointer that this pool does not own, or not on a block boundary */
+    NX_TIERED_ERR_DOUBLE_FREE /**< Freed a block that is already free */
 } nx_tiered_ret_t;
 
 /**
@@ -68,7 +69,8 @@ typedef struct {
     size_t   block_count;     /**< Number of blocks */
     size_t   free_count;      /**< Number of currently free blocks */
     size_t   min_free_count;  /**< Lowest free-block count ever seen (i.e. peak usage) */
-    void    *free_list;       /**< Head of the intrusive singly-linked free list */
+    size_t   next_free_hint;  /**< Block index to start the next allocation scan from */
+    uint8_t  used[NX_TIERED_MEM_POOL_BITMAP_BYTES];  /**< In-use bitmap, one bit per block (1 = allocated) */
 } nx_tiered_level_t;
 
 /**
@@ -90,20 +92,19 @@ typedef struct {
  * in turn.
  */
 typedef struct {
-    size_t  block_size;    /**< Size of a single block in bytes (rounded up to the alignment at init); must be >= sizeof(void*) */
-    size_t  block_count;   /**< Number of blocks in this tier; must be > 0 */
+    size_t  block_size;    /**< Size of a single block in bytes (rounded up to the alignment at init); must be > 0 */
+    size_t  block_count;   /**< Number of blocks in this tier; must be in [1, NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER] */
 } nx_tiered_level_cfg_t;
 
 /**
  * @brief Config for initializing a pool (everything except the pool handle).
  *
- * Declare one of these, fill it (a designated initializer reads nicely and lets
- * you omit forbid_fallback, which then defaults to false), and pass it to
- * nx_tiered_mem_pool_init(). The tier list is embedded inline, so the whole
- * configuration lives in one place - no separate tier array to declare.
+ * Fill one with a designated initializer (forbid_fallback may be omitted, it
+ * defaults to false) and pass it to nx_tiered_mem_pool_init(). The tier list is
+ * embedded inline. The buffer needs no special alignment; init aligns internally.
  *
  * @code
- *   static _Alignas(max_align_t) uint8_t mem[2048];
+ *   static uint8_t mem[2048];
  *   nx_tiered_mem_pool_cfg_t cfg = {
  *       .memory      = mem,
  *       .memory_size = sizeof(mem),
@@ -113,7 +114,7 @@ typedef struct {
  * @endcode
  */
 typedef struct {
-    void                 *memory;       /**< Caller buffer, must be max_align_t aligned and not NULL */
+    void                 *memory;       /**< Caller buffer, must not be NULL; any alignment (init aligns internally, wasting up to alignof(max_align_t)-1 bytes) */
     size_t                memory_size;  /**< Size of @c memory in bytes */
     nx_tiered_level_cfg_t tiers[NX_TIERED_MEM_POOL_MAX_TIERS];  /**< Embedded tier list (first tier_count entries used) */
     size_t                tier_count;   /**< Number of tiers, in [1, NX_TIERED_MEM_POOL_MAX_TIERS] */
@@ -141,17 +142,15 @@ typedef struct {
 /**
  * @brief  Initialize the pool from a configuration struct.
  *
- * The pool carves @c cfg->memory into consecutive regions by each tier's
- * block_size (rounded up to max_align_t alignment) x block_count. Tiers may be
- * given in any order; they are sorted internally by ascending block size.
+ * The pool carves @c cfg->memory into one region per tier (block_size rounded up
+ * to max_align_t alignment, x block_count). Tiers may be given in any order; they
+ * are sorted internally by ascending block size.
  *
- * On buffer size: each tier occupies "block_size rounded up to max_align_t
- * alignment" x block_count, and the buffer must be >= the sum over all tiers.
- * Rather than compute that by hand, you can oversize the buffer and read the
- * exact requirement back through @p out_required_bytes: it is written whenever
- * the tier list is valid - including when the buffer is too small (which returns
- * NX_TIERED_ERR_CONFIG) - so you can run once, see the number, then shrink the
- * buffer to fit.
+ * @p out_required_bytes reports the exact bytes the tiers need, so you can
+ * oversize the buffer, run once, then shrink to fit. It is written whenever the
+ * tier list is valid, even when the buffer is too small. An unaligned buffer
+ * costs up to alignof(max_align_t)-1 padding bytes on top of that, so leave
+ * headroom (or align the buffer).
  *
  * @param  pool               Pool handle, must not be NULL.
  * @param  cfg                Configuration, must not be NULL (see nx_tiered_mem_pool_cfg_t).
@@ -160,8 +159,10 @@ typedef struct {
  *
  * @return NX_TIERED_OK on success;
  *         NX_TIERED_ERR_PARAM if pool/cfg is NULL, or memory/memory_size/tier_count is zero/NULL;
- *         NX_TIERED_ERR_CONFIG if a tier config is invalid, memory is unaligned,
- *         there are too many tiers, or the buffer is too small.
+ *         NX_TIERED_ERR_CONFIG if a tier config is invalid (block_size is 0, or
+ *         block_count is 0 or exceeds NX_TIERED_MEM_POOL_MAX_BLOCKS_PER_TIER),
+ *         there are too many tiers, or the buffer is too small (including once
+ *         internal alignment padding is accounted for).
  */
 nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
                                         const nx_tiered_mem_pool_cfg_t *cfg,
@@ -170,12 +171,10 @@ nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
 /**
  * @brief  Allocate a block of at least @p size bytes.
  *
- * Takes a block from the smallest tier that is large enough and has a free
- * block; when the ideal tier is exhausted it falls back to a larger tier. If
- * fallback was forbidden at init time (forbid_fallback), then once the ideal
- * tier (and any tier with the same block size) is exhausted it returns NULL
- * instead of borrowing from a larger tier. The returned block is max_align_t
- * aligned. Block contents are uninitialized (like malloc).
+ * Takes a block from the smallest large-enough tier with a free block, falling
+ * back to a larger tier when exhausted (unless forbid_fallback was set at init,
+ * in which case it returns NULL rather than borrow from a larger tier). The
+ * returned block is max_align_t aligned; contents are uninitialized (like malloc).
  *
  * @param  pool Pool handle.
  * @param  size Requested byte count; returns NULL when 0.
@@ -189,13 +188,17 @@ void *nx_tiered_mem_pool_alloc(nx_tiered_mem_pool_t *pool, size_t size);
  *
  * The owning tier is inferred from the pointer address, so no size is needed.
  * Passing NULL is a no-op (returns NX_TIERED_OK), consistent with free().
+ * Freeing a block that is already free is rejected (NX_TIERED_ERR_DOUBLE_FREE)
+ * via the in-use bitmap, always on and O(1).
  *
  * @param  pool Pool handle.
  * @param  ptr  Block to return, or NULL.
  *
  * @return NX_TIERED_OK on success;
  *         NX_TIERED_ERR_PARAM if pool is NULL;
- *         NX_TIERED_ERR_INVALID if ptr is not a block owned by this pool.
+ *         NX_TIERED_ERR_INVALID if ptr is not a block owned by this pool, or does
+ *         not land on a block boundary;
+ *         NX_TIERED_ERR_DOUBLE_FREE if ptr points to a block that is already free.
  */
 nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr);
 

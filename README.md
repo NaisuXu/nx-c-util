@@ -157,29 +157,29 @@ if (src != NULL) {
 A deterministic, fragmentation-free replacement for `malloc`/`free`, built from
 several "tiers" of equally sized blocks carved out of one caller-provided buffer.
 
-- **O(1) alloc/free** — allocation rounds a request up to the smallest tier whose
-  block is large enough and pops from that tier's free list; free returns the
-  block in constant time.
-- **Zero per-block overhead** — on free, a pointer is mapped back to its owning
-  tier purely by address range; blocks carry no header of their own.
-- **No fragmentation** — within a tier every block is identical, so the pool
-  never fragments.
-- **Configurable fallback** — when the ideal tier is exhausted the pool can
-  automatically fall back to a larger tier; set `forbid_fallback` at init time to
-  restrict allocation strictly to the best-fit tier instead.
-- **One-struct configuration** — all init parameters (buffer, tier list, policy)
-  live in a single `nx_tiered_mem_pool_cfg_t` with the tier list embedded inline;
-  init also reports the exact bytes the tiers need, so you can oversize the buffer
-  and shrink it to fit after one run.
-- **Built-in statistics** — per-tier block size, block count, free count, and a
-  peak-usage high-water mark for tuning and diagnostics.
+- **Bounded, predictable timing** — a request is rounded up to the smallest
+  large-enough tier and served from its in-use bitmap. Free is O(1); allocation
+  scans a small bitmap bounded by the tier's block count.
+- **Zero per-block overhead** — blocks carry no header; the owning tier is found
+  by address range on free. Since blocks store no internal pointer, block sizes
+  down to a single alignment unit are allowed.
+- **Built-in double-free detection** — freeing an already-free block returns
+  `NX_TIERED_ERR_DOUBLE_FREE` instead of corrupting the pool, at O(1).
+- **No fragmentation** — within a tier every block is identical.
+- **Configurable fallback** — when the ideal tier is exhausted the pool falls
+  back to a larger one; set `forbid_fallback` to restrict to the best-fit tier.
+- **One-struct configuration** — buffer, tier list, and policy live in one
+  `nx_tiered_mem_pool_cfg_t`; init reports the exact bytes needed, so you can
+  oversize the buffer and shrink to fit. The buffer needs no particular alignment.
+- **Built-in statistics** — per-tier block size, count, free count, and a
+  peak-usage high-water mark.
 - **Not thread-safe** — concurrent access must be locked by the caller.
 
 ```c
 #include "nx_tiered_mem_pool.h"
 
-/* buffer must be max_align_t aligned; oversize it and let init report the exact need */
-static _Alignas(max_align_t) uint8_t mem[32 * 8 + 128 * 4];
+/* no special alignment needed; oversize it and let init report the exact need */
+static uint8_t mem[32 * 8 + 128 * 4];
 
 nx_tiered_mem_pool_t     pool;
 nx_tiered_mem_pool_cfg_t cfg = {
