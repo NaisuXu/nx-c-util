@@ -26,15 +26,6 @@ int nx_ref_msg_example_run(void);
 /** Run the nx_timer usage examples. Returns 0 on success, non-zero on failure. */
 int nx_timer_example_run(void);
 
-/** Run the nx_lock usage examples. Returns 0 on success, non-zero on failure. */
-int nx_lock_example_run(void);
-
-/** Run the nx_can_bus usage examples. Returns 0 on success, non-zero on failure. */
-int nx_can_bus_example_run(void);
-
-/** Run the nx_modbus_rtu usage examples. Returns 0 on success, non-zero on failure. */
-int nx_modbus_rtu_example_run(void);
-
 /** Run the nx_crc usage examples. Returns 0 on success, non-zero on failure. */
 int nx_crc_example_run(void);
 

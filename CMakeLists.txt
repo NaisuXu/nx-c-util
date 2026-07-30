@@ -35,13 +35,10 @@ add_executable(nx_basic_examples
     examples/basic/nx_tiered_mem_pool_example.c
     examples/basic/nx_ref_msg_example.c
     examples/basic/nx_timer_example.c
-    examples/basic/nx_can_bus_example.c
-    examples/basic/nx_modbus_rtu_example.c
     examples/basic/nx_crc_example.c
     examples/basic/nx_sha256_example.c
     ${NX_CORE_SOURCES}
     ${NX_ALGO_SOURCES}
-    ${NX_MIDDLEWARE_SOURCES}
 )
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
