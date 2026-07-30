@@ -278,7 +278,7 @@ if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
 
 A tick-based software timer manager built on `nx_list`. The caller drives it: a
 monotonically increasing tick counter advances (from a hardware timer, RTOS
-tick, or the main loop), and `nx_timer_process(mgr, now)` is called periodically
+tick, or the main loop), and `nx_timer_mgr_process(mgr, now)` is called periodically
 to fire whichever timers have expired. This module touches no hardware and
 allocates nothing, so it works the same on bare metal, under an RTOS, or on a
 PC.
@@ -289,7 +289,7 @@ PC.
   from now".
 - **One-shot and periodic** — a timer with `period = 0` fires once and stops; a
   timer with `period != 0` reloads and fires again every `period` ticks.
-- **Callback context** — callbacks run inside `nx_timer_process`. Where you call
+- **Callback context** — callbacks run inside `nx_timer_mgr_process`. Where you call
   it decides their context: call from the main loop for relaxed callbacks, or
   from the tick interrupt for tighter latency (then keep callbacks very short).
 - **Overflow-safe** — ticks are `uint32_t` and wrap around; expiry is compared
@@ -298,7 +298,7 @@ PC.
 - **Zero allocation** — every timer lives in caller-owned storage; they are
   tracked on an intrusive list.
 - **Not thread-safe** — serialize access yourself if timers are started/stopped
-  from a different context than `process`.
+  from a different context than `mgr_process`.
 
 ```c
 #include "core/nx_timer.h"
@@ -321,7 +321,7 @@ nx_timer_start(&mgr, &timer, 0, 10);
 
 /* in your tick ISR or main loop: */
 for (uint32_t tick = 0; tick < 100; tick++) {
-    nx_timer_process(&mgr, tick);   /* fires the callback at tick 0, 10, 20, ... */
+    nx_timer_mgr_process(&mgr, tick);   /* fires the callback at tick 0, 10, 20, ... */
 }
 ```
 

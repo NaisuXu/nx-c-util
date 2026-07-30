@@ -62,7 +62,7 @@ int nx_timer_example_run(void)
     printf("\nSimulating 50 ticks (1 tick = 1 arbitrary time unit):\n");
     for (uint32_t tick = 0; tick < 50; tick++) {
         printf("Tick %u:\n", tick);
-        nx_timer_process(&mgr, tick);
+        nx_timer_mgr_process(&mgr, tick);
     }
 
     /* Stop the LED timer */
@@ -72,7 +72,7 @@ int nx_timer_example_run(void)
     printf("\nContinuing for 20 more ticks:\n");
     for (uint32_t tick = 50; tick < 70; tick++) {
         printf("Tick %u:\n", tick);
-        nx_timer_process(&mgr, tick);
+        nx_timer_mgr_process(&mgr, tick);
     }
 
     /* Restart LED with different period */
@@ -82,7 +82,7 @@ int nx_timer_example_run(void)
     printf("\nFinal 15 ticks:\n");
     for (uint32_t tick = 70; tick < 85; tick++) {
         printf("Tick %u:\n", tick);
-        nx_timer_process(&mgr, tick);
+        nx_timer_mgr_process(&mgr, tick);
     }
 
     printf("\n");

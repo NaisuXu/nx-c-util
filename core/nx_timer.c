@@ -13,6 +13,43 @@ void nx_timer_mgr_init(nx_timer_mgr_t *mgr)
     mgr->last_tick = 0;
 }
 
+void nx_timer_mgr_process(nx_timer_mgr_t *mgr, uint32_t now)
+{
+    nx_list_t *pos, *n;
+
+    if (mgr == NULL) {
+        return;
+    }
+
+    mgr->last_tick = now;
+
+    nx_list_for_each_safe(pos, n, &mgr->timers) {
+        nx_timer_t *t = nx_list_entry(pos, nx_timer_t, link);
+
+        if (!t->active) {
+            continue;
+        }
+
+        /* Overflow-safe comparison: (now - expire) >= 0 when expired */
+        if ((int32_t)(now - t->expire_tick) >= 0) {
+            if (t->interval == 0) {
+                /* One-shot: stop before invoking callback */
+                nx_list_del(&t->link);
+                t->active = false;
+                if (t->cb != NULL) {
+                    t->cb(t, t->arg);
+                }
+            } else {
+                /* Periodic: reload then invoke */
+                t->expire_tick += t->interval;
+                if (t->cb != NULL) {
+                    t->cb(t, t->arg);
+                }
+            }
+        }
+    }
+}
+
 void nx_timer_init(nx_timer_t *t, void (*cb)(struct nx_timer *t, void *arg), void *arg)
 {
     if (t == NULL) {
@@ -53,41 +90,4 @@ void nx_timer_stop(nx_timer_t *t)
     }
     nx_list_del(&t->link);
     t->active = false;
-}
-
-void nx_timer_process(nx_timer_mgr_t *mgr, uint32_t now)
-{
-    nx_list_t *pos, *n;
-
-    if (mgr == NULL) {
-        return;
-    }
-
-    mgr->last_tick = now;
-
-    nx_list_for_each_safe(pos, n, &mgr->timers) {
-        nx_timer_t *t = nx_list_entry(pos, nx_timer_t, link);
-
-        if (!t->active) {
-            continue;
-        }
-
-        /* Overflow-safe comparison: (now - expire) >= 0 when expired */
-        if ((int32_t)(now - t->expire_tick) >= 0) {
-            if (t->interval == 0) {
-                /* One-shot: stop before invoking callback */
-                nx_list_del(&t->link);
-                t->active = false;
-                if (t->cb != NULL) {
-                    t->cb(t, t->arg);
-                }
-            } else {
-                /* Periodic: reload then invoke */
-                t->expire_tick += t->interval;
-                if (t->cb != NULL) {
-                    t->cb(t, t->arg);
-                }
-            }
-        }
-    }
 }

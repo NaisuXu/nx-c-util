@@ -247,7 +247,7 @@ if (nx_queue_pop(&q, &got) == NX_QUEUE_OK) {
 
 一个基于 tick 的软件定时器管理器，构建在 `nx_list` 之上。由调用者驱动：一个单调递增的
 tick 计数器不断前进（来自硬件定时器、RTOS tick 或主循环），周期性调用
-`nx_timer_process(mgr, now)` 触发已到期的定时器。本模块不触碰任何硬件、不做任何分配，
+`nx_timer_mgr_process(mgr, now)` 触发已到期的定时器。本模块不触碰任何硬件、不做任何分配，
 因此在裸机、RTOS 或 PC 上表现一致。
 
 - **tick 单位由调用者定义** —— 一个 tick 不是毫秒；无论你的源以什么为单位计数
@@ -255,14 +255,14 @@ tick 计数器不断前进（来自硬件定时器、RTOS tick 或主循环）�
   单位。`nx_timer_start(t, 100, 0)` 表示“从现在起 100 个 tick 后触发”。
 - **一次性与周期性** —— `period = 0` 的定时器触发一次后停止；`period != 0` 的定时器
   重装并每 `period` 个 tick 再次触发。
-- **回调上下文** —— 回调在 `nx_timer_process` 内部运行。你在哪里调用它就决定了回调的
+- **回调上下文** —— 回调在 `nx_timer_mgr_process` 内部运行。你在哪里调用它就决定了回调的
   上下文：在主循环调用可获得宽松的回调，在 tick 中断里调用可获得更紧的延迟（此时回调要
   非常短）。
 - **溢出安全** —— tick 是 `uint32_t` 会回绕；到期用有符号差值比较，因此只要单个定时器
   的 delay 或 period 不超过 `INT32_MAX` 个 tick（1 ms tick 下约 24.8 天），回绕就能
   被正确处理。
 - **零分配** —— 每个定时器都存放在调用者的存储中；它们挂在一个侵入式链表上跟踪。
-- **非线程安全** —— 若定时器的启动/停止与 `process` 处于不同上下文，需自行串行化访问。
+- **非线程安全** —— 若定时器的启动/停止与 `mgr_process` 处于不同上下文，需自行串行化访问。
 
 ```c
 #include "core/nx_timer.h"
@@ -285,7 +285,7 @@ nx_timer_start(&mgr, &timer, 0, 10);
 
 /* in your tick ISR or main loop: */
 for (uint32_t tick = 0; tick < 100; tick++) {
-    nx_timer_process(&mgr, tick);   /* fires the callback at tick 0, 10, 20, ... */
+    nx_timer_mgr_process(&mgr, tick);   /* fires the callback at tick 0, 10, 20, ... */
 }
 ```
 

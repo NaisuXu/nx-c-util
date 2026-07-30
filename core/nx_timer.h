@@ -74,6 +74,18 @@ typedef struct {
 void nx_timer_mgr_init(nx_timer_mgr_t *mgr);
 
 /**
+ * @brief Process expired timers against the current tick.
+ *
+ * Call this periodically (from your tick interrupt or main loop). Each expired
+ * timer's callback is invoked immediately. Periodic timers are reloaded, one-shot
+ * timers are stopped.
+ *
+ * @param mgr  The manager; must not be NULL.
+ * @param now  The current tick count from your tick source.
+ */
+void nx_timer_mgr_process(nx_timer_mgr_t *mgr, uint32_t now);
+
+/**
  * @brief Initialize a timer control block.
  *
  * Sets the callback and user context. The timer is stopped after this call;
@@ -107,18 +119,6 @@ void nx_timer_start(nx_timer_mgr_t *mgr, nx_timer_t *t, uint32_t delay, uint32_t
  * @param t  The timer to stop; must not be NULL.
  */
 void nx_timer_stop(nx_timer_t *t);
-
-/**
- * @brief Process expired timers against the current tick.
- *
- * Call this periodically (from your tick interrupt or main loop). Each expired
- * timer's callback is invoked immediately. Periodic timers are reloaded, one-shot
- * timers are stopped.
- *
- * @param mgr  The manager; must not be NULL.
- * @param now  The current tick count from your tick source.
- */
-void nx_timer_process(nx_timer_mgr_t *mgr, uint32_t now);
 
 #ifdef __cplusplus
 }
