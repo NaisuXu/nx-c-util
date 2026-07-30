@@ -497,10 +497,11 @@ nx_sha256_final(&ctx, digest);
 
 ## 使用
 
-库的源码位于 `src/`，可以直接拖进你的项目 —— 只需编译 `.c` 文件并把 `src/` 加入
-包含路径。
+库的源码按类别组织（`core/`、`middleware/`、`algo/`），可以直接拖进你的项目 —— 
+只需编译 `.c` 文件并把项目根目录加入包含路径（`-I.`），这样 
+`#include "core/nx_list.h"` 这样带目录前缀的包含就能正常工作。
 
-`example/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
+`examples/basic/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
 相同方式构建。
 
 ### 构建并运行示例
@@ -508,7 +509,6 @@ nx_sha256_final(&ctx, digest);
 在仓库根目录下：
 
 ```sh
-cd example
 cmake -S . -B build
 cmake --build build
 ```
@@ -518,19 +518,19 @@ cmake --build build
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_c_util_examples
+  ./build/nx_basic_examples
   ```
 
 - **Windows (MinGW / MSYS)**
 
   ```sh
-  ./build/nx_c_util_examples.exe
+  ./build/nx_basic_examples.exe
   ```
 
 - **Windows (Visual Studio / MSVC)** —— 多配置生成器会把二进制放在按配置划分的子目录中：
 
   ```sh
-  ./build/Debug/nx_c_util_examples.exe
+  ./build/Debug/nx_basic_examples.exe
   ```
 
 ### 选择生成器

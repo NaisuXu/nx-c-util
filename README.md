@@ -565,10 +565,12 @@ nx_sha256_final(&ctx, digest);
 
 ## Usage
 
-The library sources live in `src/` and can be dropped directly into your project
-— just compile the `.c` files and add `src/` to your include path.
+The library sources are organized by category (`core/`, `middleware/`, `algo/`) 
+and can be dropped directly into your project — just compile the `.c` files and 
+add the project root to your include path with `-I.` so directory-prefixed 
+includes like `#include "core/nx_list.h"` work.
 
-The `example/` directory contains runnable usage examples for every module,
+The `examples/basic/` directory contains runnable usage examples for every module,
 driven through CMake so they build the same way on any platform.
 
 ### Build and run the examples
@@ -576,7 +578,6 @@ driven through CMake so they build the same way on any platform.
 From the repository root:
 
 ```sh
-cd example
 cmake -S . -B build
 cmake --build build
 ```
@@ -586,20 +587,20 @@ Then run the produced executable:
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_c_util_examples
+  ./build/nx_basic_examples
   ```
 
 - **Windows (MinGW / MSYS)**
 
   ```sh
-  ./build/nx_c_util_examples.exe
+  ./build/nx_basic_examples.exe
   ```
 
 - **Windows (Visual Studio / MSVC)** — multi-config generators place the binary
   in a per-config subdirectory:
 
   ```sh
-  ./build/Debug/nx_c_util_examples.exe
+  ./build/Debug/nx_basic_examples.exe
   ```
 
 ### Choosing a generator
