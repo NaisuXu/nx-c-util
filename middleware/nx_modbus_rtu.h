@@ -211,17 +211,6 @@ static inline void nx_modbus_rtu_set_u16(uint16_t value,
 }
 
 /**
- * @brief  Test whether a function code marks an exception response.
- *
- * @param  cmd The function code byte from a response frame.
- * @return true if the exception flag (0x80) is set.
- */
-static inline bool nx_modbus_rtu_is_exception(uint8_t cmd)
-{
-    return (cmd & NX_MODBUS_RTU_EXCEPTION_FLAG) != 0u;
-}
-
-/**
  * @brief  Locate the CRC low byte within a variable-length request's payload.
  *
  * In nx_modbus_rtu_req_var_t the CRC is not a named field: it sits

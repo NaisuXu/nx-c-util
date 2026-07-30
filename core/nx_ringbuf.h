@@ -167,35 +167,11 @@ static inline size_t nx_ringbuf_size(const nx_ringbuf_t *rb)
 }
 
 /**
- * @brief  Return the buffer capacity in bytes. A NULL pointer is treated as 0.
- */
-static inline size_t nx_ringbuf_capacity(const nx_ringbuf_t *rb)
-{
-    return (rb != NULL) ? rb->capacity : 0U;
-}
-
-/**
  * @brief  Return the free space in bytes. A NULL pointer is treated as 0.
  */
 static inline size_t nx_ringbuf_free(const nx_ringbuf_t *rb)
 {
     return (rb != NULL) ? (rb->capacity - rb->count) : 0U;
-}
-
-/**
- * @brief  Whether the buffer is empty. A NULL pointer is treated as "empty".
- */
-static inline bool nx_ringbuf_is_empty(const nx_ringbuf_t *rb)
-{
-    return (rb == NULL) || (rb->count == 0U);
-}
-
-/**
- * @brief  Whether the buffer is full. A NULL pointer is treated as "full".
- */
-static inline bool nx_ringbuf_is_full(const nx_ringbuf_t *rb)
-{
-    return (rb == NULL) || (rb->buffer == NULL) || (rb->count == rb->capacity);
 }
 
 #ifdef __cplusplus
