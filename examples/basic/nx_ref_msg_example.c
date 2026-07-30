@@ -60,8 +60,7 @@ static void consumer_drain(const char *name, nx_queue_t *q)
     while (nx_queue_pop(q, &msg) == NX_QUEUE_OK) {
         /* Interpret the payload by its type and "process" it. */
         const sensor_reading_t *r = (const sensor_reading_t *)nx_ref_msg_data(msg);
-        printf("  [%s] got sensor #%u = %d  (refcount=%zu, releasing)\n",
-               name, r->sensor_id, r->value, nx_ref_msg_refcount(msg));
+        printf("  [%s] got sensor #%u = %d\n", name, r->sensor_id, r->value);
 
         /* Done with it: release this consumer's reference. The message frees
          * itself once every consumer (and the producer) has released. */
@@ -99,10 +98,8 @@ int nx_ref_msg_example_run(void)
     sensor_reading_t *reading = (sensor_reading_t *)nx_ref_msg_data(m);
     reading->sensor_id = 7;
     reading->value     = 42;
-    printf("  sensor #%u = %d, len=%zu refcount=%zu (producer)\n",
-           reading->sensor_id, reading->value,
-           nx_ref_msg_len(m), nx_ref_msg_refcount(m));
-    assert(nx_ref_msg_refcount(m) == 1);
+    printf("  sensor #%u = %d, len=%zu (producer)\n",
+           reading->sensor_id, reading->value, nx_ref_msg_len(m));
     printf("\n");
 
     /* ---- 2. publish to multiple queues at once ---- */
@@ -112,18 +109,16 @@ int nx_ref_msg_example_run(void)
     size_t delivered = 0;
     size_t first_failed = 0;
     nx_ref_msg_ret_t pr = nx_ref_msg_publish_multi(m, group, &delivered, &first_failed);
-    printf("  delivered=%zu, refcount=%zu (1 producer + %zu queues), ret=%d\n",
-           delivered, nx_ref_msg_refcount(m), delivered, (int)pr);
+    printf("  delivered=%zu (1 producer + %zu queues), ret=%d\n",
+           delivered, delivered, (int)pr);
     /* All 3 accepted: ret is OK and first_failed points one past the last (== 3). */
     assert(pr == NX_REF_MSG_OK);
     assert(delivered == 3);
     assert(first_failed == 3);
-    assert(nx_ref_msg_refcount(m) == 4);
 
     /* Producer is done: give up its own reference. */
     nx_ref_msg_release(m);
-    printf("  producer released -> refcount=%zu\n", nx_ref_msg_refcount(m));
-    assert(nx_ref_msg_refcount(m) == 3);
+    printf("  producer released\n");
     printf("\n");
 
     /* ---- 3. each consumer drains its own queue, uses data, releases ---- */
@@ -146,8 +141,8 @@ int nx_ref_msg_example_run(void)
     nx_ref_msg_t *m2 = nx_ref_msg_alloc(&pool, sizeof(sensor_reading_t));
     nx_queue_t *none[] = { NULL };   /* immediately NULL: an empty list */
     nx_ref_msg_publish_multi(m2, none, &delivered, NULL);
-    printf("  delivered=%zu, refcount=%zu\n", delivered, nx_ref_msg_refcount(m2));
-    assert(delivered == 0 && nx_ref_msg_refcount(m2) == 1);
+    printf("  delivered=%zu\n", delivered);
+    assert(delivered == 0);
     nx_ref_msg_release(m2);   /* producer reference -> 0, freed */
     assert(pool_free_blocks(&pool) == POOL_NBLK);
     printf("  producer released; pool fully reclaimed (%zu/%d)\n",

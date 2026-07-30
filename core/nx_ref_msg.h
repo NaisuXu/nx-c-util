@@ -50,7 +50,7 @@ typedef enum {
  * @brief Reference-counted message object.
  *
  * @note  Members are implementation details; do not access them directly, use
- *        nx_ref_msg_data()/_len()/_refcount(). The header and data are one
+ *        nx_ref_msg_data()/_len(). The header and data are one
  *        contiguous allocation; data is a flexible array member.
  */
 typedef struct nx_ref_msg {
@@ -135,14 +135,6 @@ static inline nx_ref_msg_ret_t nx_ref_msg_shrink(nx_ref_msg_t *msg, size_t new_l
 
     msg->len = new_len;
     return NX_REF_MSG_OK;
-}
-
-/**
- * @brief  Return the message's current reference count. 0 for a NULL message.
- */
-static inline size_t nx_ref_msg_refcount(const nx_ref_msg_t *msg)
-{
-    return (msg != NULL) ? msg->refcount : 0u;
 }
 
 /**
