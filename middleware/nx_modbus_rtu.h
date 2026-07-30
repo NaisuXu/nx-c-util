@@ -3,10 +3,9 @@
  * @brief   Modbus RTU frame structures and helpers, in pure C.
  *
  * Provides in-memory representations of the common Modbus RTU frames (requests,
- * responses, and exception responses), byte-order helpers, and a self-contained
- * CRC-16/MODBUS. The frame structs and the byte helpers are header-side (the
- * helpers are static inline); the CRC routines live in nx_modbus_rtu.c, which is
- * the only part that must be compiled and linked.
+ * responses, and exception responses) and a self-contained CRC-16/MODBUS. The
+ * frame structs are header-side; the CRC routines live in nx_modbus_rtu.c, which
+ * is the only part that must be compiled and linked.
  *
  * Wire layout: every frame struct is made of uint8_t fields only, so it has
  * alignment 1 and no padding, and maps 1:1 onto the RTU byte stream without any
@@ -15,8 +14,7 @@
  *
  * Byte order on the wire:
  *   - 16-bit values (address, quantity, register data) are big-endian
- *     (high byte first) - hence the explicit @c _h / @c _l field pairs. Use
- *     nx_modbus_rtu_get_u16 / nx_modbus_rtu_set_u16 to convert.
+ *     (high byte first) - hence the explicit @c _h / @c _l field pairs.
  *   - The trailing CRC-16/MODBUS is little-endian (low byte first, @c crc_l
  *     then @c crc_h). Compute it with nx_modbus_rtu_crc16 over every byte from
  *     @c addr up to (but not including) the CRC, or use nx_modbus_rtu_set_crc /
@@ -180,35 +178,6 @@ typedef struct {
     uint8_t crc_l;           /**< CRC low byte (transmitted first) */
     uint8_t crc_h;           /**< CRC high byte */
 } nx_modbus_rtu_rsp_exc_t;
-
-/**
- * @brief  Read a big-endian 16-bit value from two wire bytes (high, low).
- *
- * Modbus carries addresses, quantities and register values as big-endian
- * 16-bit words. Use this to combine an @c _h / @c _l field pair into a value.
- *
- * @param  high High (first-transmitted) byte.
- * @param  low  Low (second-transmitted) byte.
- * @return The 16-bit value.
- */
-static inline uint16_t nx_modbus_rtu_get_u16(uint8_t high, uint8_t low)
-{
-    return (uint16_t)(((uint16_t)high << 8) | (uint16_t)low);
-}
-
-/**
- * @brief  Split a 16-bit value into big-endian wire bytes (high, low).
- *
- * @param  value    The 16-bit value.
- * @param  out_high Receives the high (first-transmitted) byte; must not be NULL.
- * @param  out_low  Receives the low (second-transmitted) byte; must not be NULL.
- */
-static inline void nx_modbus_rtu_set_u16(uint16_t value,
-                                         uint8_t *out_high, uint8_t *out_low)
-{
-    if (out_high != NULL) { *out_high = (uint8_t)(value >> 8); }
-    if (out_low  != NULL) { *out_low  = (uint8_t)(value & 0xFFu); }
-}
 
 /**
  * @brief  Locate the CRC low byte within a variable-length request's payload.
