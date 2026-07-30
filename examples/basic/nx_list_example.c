@@ -2,7 +2,7 @@
  * @file    nx_list_example.c
  * @brief   Example usage of the nx_list intrusive linked list.
  */
-#include "../src/nx_list.h"
+#include "core/nx_list.h"
 
 #include <stdio.h>
 #include <stddef.h>

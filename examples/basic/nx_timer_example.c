@@ -2,7 +2,7 @@
  * @file    nx_timer_example.c
  * @brief   Example usage of the nx_timer software timer manager.
  */
-#include "../src/nx_timer.h"
+#include "core/nx_timer.h"
 
 #include <stdio.h>
 #include <stdint.h>
