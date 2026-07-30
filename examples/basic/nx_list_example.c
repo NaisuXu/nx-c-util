@@ -16,7 +16,7 @@ typedef struct task {
 
 int nx_list_example_run(void)
 {
-    printf("\n=== nx_list example ===\n");
+    printf("########## nx_list examples ##########\n");
 
     nx_list_t head;
     nx_list_init(&head);

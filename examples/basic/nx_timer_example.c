@@ -35,7 +35,7 @@ static void status_cb(nx_timer_t *t, void *arg)
 
 int nx_timer_example_run(void)
 {
-    printf("\n=== nx_timer example ===\n");
+    printf("########## nx_timer examples ##########\n");
 
     nx_timer_mgr_t mgr;
     nx_timer_t led_timer, alarm_timer, status_timer;
