@@ -14,7 +14,7 @@
  * nx_modbus_rtu_set_u16 to read/write them portably.
  */
 #include "nx_c_util_examples.h"
-#include "nx_modbus_rtu.h"
+#include "protocol/nx_modbus_rtu.h"
 
 #include <stdio.h>
 #include <string.h>

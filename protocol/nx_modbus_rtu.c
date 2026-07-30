@@ -6,7 +6,7 @@
  * (one copy in the whole program). The table encodes CRC-16/MODBUS (poly 0x8005
  * reflected, init 0xFFFF, refin/refout true, xorout 0).
  */
-#include "nx_modbus_rtu.h"
+#include "protocol/nx_modbus_rtu.h"
 
 /* Precomputed CRC-16/MODBUS table: crc16_table[b] is the register update for
  * input byte b, in the reflected (low-bit-first) domain. */

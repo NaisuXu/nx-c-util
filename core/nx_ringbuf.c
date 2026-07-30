@@ -2,7 +2,7 @@
  * @file    nx_ringbuf.c
  * @brief   Implementation of the nx_ringbuf byte ring buffer (purely static buffer, no dynamic memory).
  */
-#include "nx_ringbuf.h"
+#include "core/nx_ringbuf.h"
 
 #include <string.h>
 

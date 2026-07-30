@@ -14,6 +14,21 @@
 - **可移植** —— 标准 C11，无平台相关依赖；在 Windows、Linux、macOS 上都能构建
   和运行。
 
+## 目录结构
+
+```
+nx-c-util/
+├── core/         # 核心构件（list, queue, ringbuf, timer, ref_msg, mem_pool, lock）
+├── protocol/     # 协议帧解析器（modbus_rtu, can_bus）
+├── algo/         # 算法（crc, sha256）
+├── device/       # 平台无关的设备驱动（未来）
+├── middleware/   # 完整协议栈（未来：modbus_rtu_slave, can_isotp）
+└── examples/     # 使用示例
+```
+
+所有 include 使用目录前缀：`#include "core/nx_list.h"`。编译时添加 `-I.` 标志，
+使根目录在 include 路径中。
+
 ## 模块
 
 ### nx_list —— 侵入式双向循环链表
@@ -36,7 +51,7 @@
 - **仅头文件** —— 所有操作都是 `static inline`。
 
 ```c
-#include "nx_list.h"
+#include "core/nx_list.h"
 
 typedef struct task {
     int         id;
@@ -77,7 +92,7 @@ nx_list_del(&t1.link);   /* remove from anywhere */
   `is_empty` / `is_full`。
 
 ```c
-#include "nx_queue.h"
+#include "core/nx_queue.h"
 
 int        storage[4];            /* caller-owned backing storage */
 nx_queue_t q;
@@ -114,7 +129,7 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 - **辅助函数** —— `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`。
 
 ```c
-#include "nx_ringbuf.h"
+#include "core/nx_ringbuf.h"
 
 uint8_t      storage[64];      /* caller-owned backing storage */
 nx_ringbuf_t rb;
@@ -155,7 +170,7 @@ if (src != NULL) {
 - **非线程安全** —— 并发访问必须由调用者加锁。
 
 ```c
-#include "nx_tiered_mem_pool.h"
+#include "core/nx_tiered_mem_pool.h"
 
 /* no special alignment needed; oversize it and let init report the exact need */
 static uint8_t mem[32 * 8 + 128 * 4];
@@ -204,7 +219,7 @@ nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from 
 - **非线程安全** —— 引用计数是普通计数器；并发访问必须由调用者加锁。
 
 ```c
-#include "nx_ref_msg.h"
+#include "core/nx_ref_msg.h"
 
 /* one consumer queue (its buffer holds message pointers) */
 nx_ref_msg_t *qbuf[4];
@@ -250,7 +265,7 @@ tick 计数器不断前进（来自硬件定时器、RTOS tick 或主循环）�
 - **非线程安全** —— 若定时器的启动/停止与 `process` 处于不同上下文，需自行串行化访问。
 
 ```c
-#include "nx_timer.h"
+#include "core/nx_timer.h"
 
 static void led_blink(nx_timer_t *t, void *arg) {
     int *state = (int *)arg;
@@ -293,8 +308,8 @@ for (uint32_t tick = 0; tick < 100; tick++) {
   因此同样的调用点在单线程构建中会被编译成空。
 
 ```c
-#include "nx_lock.h"
-#include "nx_queue.h"
+#include "core/nx_lock.h"
+#include "core/nx_queue.h"
 
 /* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
 static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
@@ -333,7 +348,7 @@ nx_lock_exit(&g_lock, s);
 - **仅头文件** —— 每个辅助函数都是 `static inline`；只需包含头文件，无需编译或链接。
 
 ```c
-#include "nx_can_bus.h"
+#include "protocol/nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -385,7 +400,7 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
   不依赖其他模块。
 
 ```c
-#include "nx_modbus_rtu.h"
+#include "protocol/nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];
@@ -425,7 +440,7 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
   为空操作；存储由调用者拥有，库不使用任何动态内存。
 
 ```c
-#include "nx_crc.h"
+#include "algo/nx_crc.h"
 
 const char *msg = "123456789";
 
@@ -464,7 +479,7 @@ uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
 - **纯哈希，而非 MAC** —— 若需消息认证，在其之上构建 HMAC-SHA256。
 
 ```c
-#include "nx_sha256.h"
+#include "algo/nx_sha256.h"
 
 uint8_t digest[NX_SHA256_DIGEST_SIZE];
 

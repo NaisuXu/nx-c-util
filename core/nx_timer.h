@@ -33,7 +33,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "nx_list.h"
+#include "core/nx_list.h"
 
 #ifdef __cplusplus
 extern "C" {

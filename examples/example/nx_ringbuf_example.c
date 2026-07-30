@@ -11,7 +11,7 @@
  * The ring buffer never allocates: every example provides its own static buffer.
  */
 #include "nx_c_util_examples.h"
-#include "nx_ringbuf.h"
+#include "core/nx_ringbuf.h"
 
 #include <stdio.h>
 #include <string.h>

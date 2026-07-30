@@ -17,6 +17,21 @@ Every component follows the same design philosophy:
 - **Portable** — standard C11 with no platform-specific dependencies; builds and
   runs on Windows, Linux, and macOS alike.
 
+## Directory Structure
+
+```
+nx-c-util/
+├── core/         # Core building blocks (list, queue, ringbuf, timer, ref_msg, mem_pool, lock)
+├── protocol/     # Protocol frame parsers (modbus_rtu, can_bus)
+├── algo/         # Algorithms (crc, sha256)
+├── device/       # Platform-independent device drivers (future)
+├── middleware/   # Complete protocol stacks (future: modbus_rtu_slave, can_isotp)
+└── examples/     # Usage examples
+```
+
+All includes use directory prefixes: `#include "core/nx_list.h"`. Add `-I.` to
+your compiler flags so the root directory is in the include path.
+
 ## Modules
 
 ### nx_list — intrusive doubly-linked circular list
@@ -44,7 +59,7 @@ deletes have no head/tail special cases.
 - **Header-only** — all operations are `static inline`.
 
 ```c
-#include "nx_list.h"
+#include "core/nx_list.h"
 
 typedef struct task {
     int         id;
@@ -87,7 +102,7 @@ A fixed-capacity FIFO queue backed by a caller-provided buffer.
   `is_empty` / `is_full`.
 
 ```c
-#include "nx_queue.h"
+#include "core/nx_queue.h"
 
 int        storage[4];            /* caller-owned backing storage */
 nx_queue_t q;
@@ -130,7 +145,7 @@ is the natural fit for serial I/O (UART RX/TX) and other streaming data.
 - **Helpers** — `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`.
 
 ```c
-#include "nx_ringbuf.h"
+#include "core/nx_ringbuf.h"
 
 uint8_t      storage[64];      /* caller-owned backing storage */
 nx_ringbuf_t rb;
@@ -176,7 +191,7 @@ several "tiers" of equally sized blocks carved out of one caller-provided buffer
 - **Not thread-safe** — concurrent access must be locked by the caller.
 
 ```c
-#include "nx_tiered_mem_pool.h"
+#include "core/nx_tiered_mem_pool.h"
 
 /* no special alignment needed; oversize it and let init report the exact need */
 static uint8_t mem[32 * 8 + 128 * 4];
@@ -235,7 +250,7 @@ reference count decides when the block goes back to the pool.
   locked by the caller.
 
 ```c
-#include "nx_ref_msg.h"
+#include "core/nx_ref_msg.h"
 
 /* one consumer queue (its buffer holds message pointers) */
 nx_ref_msg_t *qbuf[4];
@@ -286,7 +301,7 @@ PC.
   from a different context than `process`.
 
 ```c
-#include "nx_timer.h"
+#include "core/nx_timer.h"
 
 static void led_blink(nx_timer_t *t, void *arg) {
     int *state = (int *)arg;
@@ -334,8 +349,8 @@ refcount change).
   nothing, so the same call sites compile to nothing on a single-threaded build.
 
 ```c
-#include "nx_lock.h"
-#include "nx_queue.h"
+#include "core/nx_lock.h"
+#include "core/nx_queue.h"
 
 /* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
 static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
@@ -383,7 +398,7 @@ context.
   nothing to compile or link.
 
 ```c
-#include "nx_can_bus.h"
+#include "protocol/nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -441,7 +456,7 @@ small lookup table, so this module has a `.c` file.
   the header; only the CRC lives in the `.c`. No dependency on the other modules.
 
 ```c
-#include "nx_modbus_rtu.h"
+#include "protocol/nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];
@@ -488,7 +503,7 @@ store and every call is deterministic.
   storage is caller-owned and the library uses no dynamic memory.
 
 ```c
-#include "nx_crc.h"
+#include "algo/nx_crc.h"
 
 const char *msg = "123456789";
 
@@ -531,7 +546,7 @@ A pure-C SHA-256 (FIPS 180-4) implementation producing a 32-byte digest.
   top of it.
 
 ```c
-#include "nx_sha256.h"
+#include "algo/nx_sha256.h"
 
 uint8_t digest[NX_SHA256_DIGEST_SIZE];
 

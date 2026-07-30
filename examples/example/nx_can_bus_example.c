@@ -14,7 +14,7 @@
  * extended uses the low 29 bits).
  */
 #include "nx_c_util_examples.h"
-#include "nx_can_bus.h"
+#include "protocol/nx_can_bus.h"
 
 #include <stdio.h>
 #include <string.h>

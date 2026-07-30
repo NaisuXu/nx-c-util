@@ -2,7 +2,7 @@
  * @file    nx_tiered_mem_pool.c
  * @brief   Implementation of the nx_tiered_mem_pool tiered static memory pool.
  */
-#include "nx_tiered_mem_pool.h"
+#include "core/nx_tiered_mem_pool.h"
 
 /* Alignment that every block (and every returned pointer) is rounded up to. */
 #define NX_TIERED_ALIGN  (_Alignof(max_align_t))

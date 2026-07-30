@@ -15,7 +15,7 @@
  * ----------------------------------------------------------------------------
  */
 #include "nx_c_util_examples.h"
-#include "nx_crc.h"
+#include "algo/nx_crc.h"
 
 #include <stdio.h>
 

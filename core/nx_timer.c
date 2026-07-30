@@ -2,7 +2,7 @@
  * @file    nx_timer.c
  * @brief   Software timer manager implementation.
  */
-#include "nx_timer.h"
+#include "core/nx_timer.h"
 
 void nx_timer_mgr_init(nx_timer_mgr_t *mgr)
 {

@@ -2,7 +2,7 @@
  * @file    nx_queue.c
  * @brief   Implementation of the nx_queue ring-buffer queue (purely static buffer, no dynamic memory).
  */
-#include "nx_queue.h"
+#include "core/nx_queue.h"
 
 #include <string.h>
 

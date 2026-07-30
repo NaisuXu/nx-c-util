@@ -14,7 +14,7 @@
  * ----------------------------------------------------------------------------
  */
 #include "nx_c_util_examples.h"
-#include "nx_sha256.h"
+#include "algo/nx_sha256.h"
 
 #include <stdio.h>
 #include <string.h>

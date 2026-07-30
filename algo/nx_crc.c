@@ -9,7 +9,7 @@
  * the end; this keeps a single code path correct for every refin/refout
  * combination. The one-shot and named functions are thin wrappers over this core.
  */
-#include "nx_crc.h"
+#include "algo/nx_crc.h"
 
 /* ------------------------------------------------------------------ */
 /* Bit-reflection helpers.                                            */

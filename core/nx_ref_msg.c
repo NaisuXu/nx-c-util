@@ -2,7 +2,7 @@
  * @file    nx_ref_msg.c
  * @brief   Implementation of nx_ref_msg: reference-counted messages with multi-queue publish.
  */
-#include "nx_ref_msg.h"
+#include "core/nx_ref_msg.h"
 
 nx_queue_ret_t nx_ref_msg_queue_init(nx_queue_t *q,
                                      void       *buffer,
