@@ -19,11 +19,11 @@
 ```
 nx-c-util/
 ├── core/         # 核心构件（list, queue, ringbuf, timer, ref_msg, mem_pool, lock）
-├── protocol/     # 协议帧解析器（modbus_rtu, can_bus）
+├── middleware/   # 协议解析器和协议栈（modbus_rtu, can_bus，未来：modbus_rtu_slave, can_isotp）
 ├── algo/         # 算法（crc, sha256）
 ├── device/       # 平台无关的设备驱动（未来）
-├── middleware/   # 完整协议栈（未来：modbus_rtu_slave, can_isotp）
-└── examples/     # 使用示例
+└── examples/
+    └── basic/    # 基础组件使用示例
 ```
 
 所有 include 使用目录前缀：`#include "core/nx_list.h"`。编译时添加 `-I.` 标志，
@@ -348,7 +348,7 @@ nx_lock_exit(&g_lock, s);
 - **仅头文件** —— 每个辅助函数都是 `static inline`；只需包含头文件，无需编译或链接。
 
 ```c
-#include "protocol/nx_can_bus.h"
+#include "middleware/nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -400,7 +400,7 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
   不依赖其他模块。
 
 ```c
-#include "protocol/nx_modbus_rtu.h"
+#include "middleware/nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];

@@ -1,8 +1,8 @@
 /**
- * @file    examples_common.h
+ * @file    nx_basic_examples.h
  * @brief   Entry points for the per-component example/test routines.
  *
- * Each nx-c-util component has its own example file; examples_common.c runs
+ * Each nx-c-util component has its own example file; nx_basic_examples.c runs
  * them in turn.
  */
 #ifndef EXAMPLES_COMMON_H

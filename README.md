@@ -22,11 +22,11 @@ Every component follows the same design philosophy:
 ```
 nx-c-util/
 ├── core/         # Core building blocks (list, queue, ringbuf, timer, ref_msg, mem_pool, lock)
-├── protocol/     # Protocol frame parsers (modbus_rtu, can_bus)
+├── middleware/   # Protocol parsers and stacks (modbus_rtu, can_bus, future: modbus_rtu_slave, can_isotp)
 ├── algo/         # Algorithms (crc, sha256)
 ├── device/       # Platform-independent device drivers (future)
-├── middleware/   # Complete protocol stacks (future: modbus_rtu_slave, can_isotp)
-└── examples/     # Usage examples
+└── examples/
+    └── basic/    # Basic component usage examples
 ```
 
 All includes use directory prefixes: `#include "core/nx_list.h"`. Add `-I.` to
@@ -398,7 +398,7 @@ context.
   nothing to compile or link.
 
 ```c
-#include "protocol/nx_can_bus.h"
+#include "middleware/nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -456,7 +456,7 @@ small lookup table, so this module has a `.c` file.
   the header; only the CRC lives in the `.c`. No dependency on the other modules.
 
 ```c
-#include "protocol/nx_modbus_rtu.h"
+#include "middleware/nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];
