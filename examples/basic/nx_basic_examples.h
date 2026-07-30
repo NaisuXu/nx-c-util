@@ -5,8 +5,8 @@
  * Each nx-c-util component has its own example file; nx_basic_examples.c runs
  * them in turn.
  */
-#ifndef EXAMPLES_COMMON_H
-#define EXAMPLES_COMMON_H
+#ifndef NX_BASIC_EXAMPLES_H
+#define NX_BASIC_EXAMPLES_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,4 +40,4 @@ int nx_sha256_example_run(void);
 }
 #endif
 
-#endif /* EXAMPLES_COMMON_H */
+#endif /* NX_BASIC_EXAMPLES_H */
