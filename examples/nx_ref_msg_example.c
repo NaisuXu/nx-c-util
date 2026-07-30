@@ -15,7 +15,7 @@
  * All storage is static: the pool buffer and every queue buffer live below.
  * The example self-checks with a few asserts and prints what happens.
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "core/nx_ref_msg.h"
 
 #include <assert.h>

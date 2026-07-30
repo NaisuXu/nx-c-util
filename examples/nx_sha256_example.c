@@ -13,7 +13,7 @@
  *     printf '%s' "your text" | sha256sum
  * ----------------------------------------------------------------------------
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "algo/nx_sha256.h"
 
 #include <stdio.h>

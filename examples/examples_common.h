@@ -1,12 +1,12 @@
 /**
- * @file    nx_c_util_examples.h
+ * @file    examples_common.h
  * @brief   Entry points for the per-component example/test routines.
  *
- * Each nx-c-util component has its own example file; nx_c_util_examples.c runs
+ * Each nx-c-util component has its own example file; examples_common.c runs
  * them in turn.
  */
-#ifndef NX_C_UTIL_EXAMPLES_H
-#define NX_C_UTIL_EXAMPLES_H
+#ifndef EXAMPLES_COMMON_H
+#define EXAMPLES_COMMON_H
 
 /** Run the nx_list usage examples. Returns 0 on success, non-zero on failure. */
 int nx_list_example_run(void);
@@ -41,4 +41,4 @@ int nx_crc_example_run(void);
 /** Run the nx_sha256 usage examples. Returns 0 on success, non-zero on failure. */
 int nx_sha256_example_run(void);
 
-#endif /* NX_C_UTIL_EXAMPLES_H */
+#endif /* EXAMPLES_COMMON_H */

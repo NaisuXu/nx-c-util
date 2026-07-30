@@ -13,7 +13,7 @@
  * are stored in network (big-endian) order on the wire; use nx_modbus_rtu_get_u16 /
  * nx_modbus_rtu_set_u16 to read/write them portably.
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "protocol/nx_modbus_rtu.h"
 
 #include <stdio.h>

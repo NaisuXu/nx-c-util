@@ -11,7 +11,7 @@
  *
  * The pool never allocates: all storage is the static g_pool_mem array below.
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "core/nx_tiered_mem_pool.h"
 
 #include <stdio.h>

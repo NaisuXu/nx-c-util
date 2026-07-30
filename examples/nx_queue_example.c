@@ -10,7 +10,7 @@
  *
  * The queue never allocates: every example provides its own static buffer.
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "core/nx_queue.h"
 
 #include <stdio.h>

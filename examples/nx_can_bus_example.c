@@ -13,7 +13,7 @@
  * The ID field is a plain uint32_t (11-bit standard uses the low 11 bits; 29-bit
  * extended uses the low 29 bits).
  */
-#include "nx_c_util_examples.h"
+#include "examples_common.h"
 #include "protocol/nx_can_bus.h"
 
 #include <stdio.h>
