@@ -8,6 +8,10 @@
 #ifndef EXAMPLES_COMMON_H
 #define EXAMPLES_COMMON_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Run the nx_list usage examples. Returns 0 on success, non-zero on failure. */
 int nx_list_example_run(void);
 
@@ -31,5 +35,9 @@ int nx_crc_example_run(void);
 
 /** Run the nx_sha256 usage examples. Returns 0 on success, non-zero on failure. */
 int nx_sha256_example_run(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* EXAMPLES_COMMON_H */

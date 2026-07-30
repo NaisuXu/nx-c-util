@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(nx_c_util C)
+project(nx_c_util C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Include path: project root so "core/nx_list.h" works
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
