@@ -14,7 +14,7 @@
  * Modbus RTU transmits it low byte first (little-endian) on the wire.
  * ----------------------------------------------------------------------------
  */
-#include "nx_core_examples.h"
+#include "nx_algo_examples.h"
 #include "src/algo/nx_crc.h"
 
 #include <stdio.h>

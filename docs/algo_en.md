@@ -85,9 +85,10 @@ nx_sha256_final(&ctx, digest);
 ## Usage
 
 The library sources are organized by category (`core/`, `middleware/`, `algo/`) 
-and can be dropped directly into your project — just compile the `.c` files and 
-add the project root to your include path with `-I.` so directory-prefixed 
-includes like `#include "nx_list.h"` work.
+and can be dropped into your project — most modules have no dependencies beyond 
+standard C and can be used independently. Headers use single-level includes 
+(e.g., `#include "nx_list.h"`), so add the directory containing the copied files 
+to your include path.
 
-The `examples/basic/` directory contains runnable usage examples for every module,
+The `examples/core/` directory contains runnable usage examples for every module,
 driven through CMake so they build the same way on any platform.

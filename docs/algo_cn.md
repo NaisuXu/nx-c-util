@@ -74,11 +74,12 @@ nx_sha256_final(&ctx, digest);
 
 ## 使用
 
-库的源码按类别组织（`core/`、`middleware/`、`algo/`），可以直接拖进你的项目 —— 
-只需编译 `.c` 文件并把项目根目录加入包含路径（`-I.`），这样 
-`#include "nx_list.h"` 这样带目录前缀的包含就能正常工作。
+库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`），
+可以直接拖进你的项目 —— 大多数模块除了标准 C 外没有依赖，可以独立使用。头文件使用
+单层 include（如 `#include "nx_list.h"`），因此把拷贝文件所在的目录加入你的 
+include 路径即可。
 
-`examples/basic/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
+`examples/core/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
 相同方式构建。
 
 ### 构建并运行示例

@@ -24,7 +24,8 @@ nx-c-util/
 │   ├── algo/         # 算法（crc, sha256）
 │   └── device/       # 平台无关的设备驱动（ws2812）
 └── examples/
-    ├── core/         # 核心和算法使用示例
+    ├── core/         # 核心模块使用示例
+    ├── algo/         # 算法模块使用示例
     └── device/       # 设备驱动使用示例
 ```
 
@@ -65,12 +66,13 @@ nx-c-util/
 
 ## 使用
 
-库的源码按类别组织（`core/`、`middleware/`、`algo/`），可以直接拖进你的项目 —— 
-只需编译 `.c` 文件并把项目根目录加入包含路径（`-I.`），这样 
-`#include "nx_list.h"` 这样带目录前缀的包含就能正常工作。
+库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`、
+`src/device/`），可以直接拖进你的项目 —— 大多数模块除了标准 C 外没有依赖，可以独立
+使用。头文件使用单层 include（如 `#include "nx_list.h"`），因此把拷贝文件所在的
+目录加入你的 include 路径即可。
 
-`examples/basic/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
-相同方式构建。
+`examples/core/`、`examples/algo/` 和 `examples/device/` 目录包含每个模块可运行的
+用法示例，通过 CMake 驱动，因此在任何平台上都以相同方式构建。
 
 ### 构建并运行示例
 
@@ -86,19 +88,25 @@ cmake --build build
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_basic_examples
+  ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer）
+  ./build/nx_algo_examples        # 算法模块（crc, sha256）
+  ./build/nx_device_examples      # 设备驱动（ws2812）
   ```
 
 - **Windows (MinGW / MSYS)**
 
   ```sh
-  ./build/nx_basic_examples.exe
+  ./build/nx_core_examples.exe
+  ./build/nx_algo_examples.exe
+  ./build/nx_device_examples.exe
   ```
 
 - **Windows (Visual Studio / MSVC)** —— 多配置生成器会把二进制放在按配置划分的子目录中：
 
   ```sh
-  ./build/Debug/nx_basic_examples.exe
+  ./build/Debug/nx_core_examples.exe
+  ./build/Debug/nx_algo_examples.exe
+  ./build/Debug/nx_device_examples.exe
   ```
 
 ### 选择生成器

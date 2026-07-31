@@ -41,9 +41,14 @@ add_executable(nx_core_examples
     examples/core/nx_tiered_mem_pool_example.c
     examples/core/nx_ref_msg_example.c
     examples/core/nx_timer_example.c
-    examples/core/nx_crc_example.c
-    examples/core/nx_sha256_example.c
     ${NX_CORE_SOURCES}
+)
+
+# Algo examples executable
+add_executable(nx_algo_examples
+    examples/algo/nx_algo_examples.c
+    examples/algo/nx_crc_example.c
+    examples/algo/nx_sha256_example.c
     ${NX_ALGO_SOURCES}
 )
 
@@ -56,5 +61,6 @@ add_executable(nx_device_examples
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(nx_core_examples PRIVATE -Wall -Wextra)
+    target_compile_options(nx_algo_examples PRIVATE -Wall -Wextra)
     target_compile_options(nx_device_examples PRIVATE -Wall -Wextra)
 endif()

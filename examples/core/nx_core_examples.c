@@ -1,6 +1,6 @@
 /**
  * @file    nx_core_examples.c
- * @brief   Example driver: runs each nx-c-util component's examples in turn.
+ * @brief   Example driver: runs each nx-c-util core component's examples in turn.
  *
  * The actual examples live in per-component files:
  *   - nx_list_example.c           -> nx_list_example_run()
@@ -9,8 +9,6 @@
  *   - nx_tiered_mem_pool_example.c  -> nx_tiered_mem_pool_example_run()
  *   - nx_ref_msg_example.c        -> nx_ref_msg_example_run()
  *   - nx_timer_example.c          -> nx_timer_example_run()
- *   - nx_crc_example.c            -> nx_crc_example_run()
- *   - nx_sha256_example.c         -> nx_sha256_example_run()
  */
 #include "nx_core_examples.h"
 
@@ -26,8 +24,6 @@ int main(void)
     rc |= nx_tiered_mem_pool_example_run();
     rc |= nx_ref_msg_example_run();
     rc |= nx_timer_example_run();
-    rc |= nx_crc_example_run();
-    rc |= nx_sha256_example_run();
 
     return rc;
 }

@@ -30,12 +30,6 @@ int nx_ref_msg_example_run(void);
 /** Run the nx_timer usage examples. Returns 0 on success, non-zero on failure. */
 int nx_timer_example_run(void);
 
-/** Run the nx_crc usage examples. Returns 0 on success, non-zero on failure. */
-int nx_crc_example_run(void);
-
-/** Run the nx_sha256 usage examples. Returns 0 on success, non-zero on failure. */
-int nx_sha256_example_run(void);
-
 #ifdef __cplusplus
 }
 #endif
