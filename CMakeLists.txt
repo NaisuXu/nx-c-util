@@ -49,6 +49,7 @@ add_executable(nx_basic_examples
 
 # Device examples executable
 add_executable(nx_device_examples
+    examples/device/nx_device_examples.c
     examples/device/nx_ws2812_example.c
     ${NX_DEVICE_SOURCES}
 )

@@ -14,6 +14,7 @@
  * bytes into a static buffer that the example then inspects - which doubles as a
  * check that the encoding is what WS2812 expects.
  */
+#include "nx_device_examples.h"
 #include "device/nx_ws2812.h"
 
 #include <stdio.h>
@@ -377,7 +378,7 @@ static void example_busy(nx_ws2812_t *strip)
     printf("\n");
 }
 
-int main(void)
+int nx_ws2812_example_run(void)
 {
     printf("########## nx_ws2812 examples ##########\n");
 
