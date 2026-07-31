@@ -18,16 +18,19 @@
 
 ```
 nx-c-util/
-├── core/         # 核心构件（list, queue, ringbuf, timer, ref_msg, mem_pool, lock）
-├── middleware/   # 协议解析器和协议栈（modbus_rtu, can_bus，未来：modbus_rtu_slave, can_isotp）
-├── algo/         # 算法（crc, sha256）
-├── device/       # 平台无关的设备驱动（未来）
+├── src/
+│   ├── core/         # 核心构件（list, queue, ringbuf, timer, ref_msg, mem_pool, lock）
+│   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, can_bus，未来：modbus_rtu_slave, can_isotp）
+│   ├── algo/         # 算法（crc, sha256）
+│   └── device/       # 平台无关的设备驱动（ws2812）
 └── examples/
-    └── basic/    # 基础组件使用示例
+    ├── core/         # 核心和算法使用示例
+    └── device/       # 设备驱动使用示例
 ```
 
-所有 include 使用目录前缀：`#include "core/nx_list.h"`。编译时添加 `-I.` 标志，
-使根目录在 include 路径中。
+每个模块都设计为可独立使用。在你的项目中集成时，只需拷贝所需的 `.c` 和 `.h` 
+文件即可。头文件使用单层 include（如 `#include "nx_list.h"`）无子目录前缀，
+因此把拷贝文件所在的目录加入你的 include 路径即可。
 
 ## 模块
 
@@ -51,7 +54,7 @@ nx-c-util/
 - **仅头文件** —— 所有操作都是 `static inline`。
 
 ```c
-#include "core/nx_list.h"
+#include "nx_list.h"
 
 typedef struct task {
     int         id;
@@ -92,7 +95,7 @@ nx_list_del(&t1.link);   /* remove from anywhere */
   `is_empty` / `is_full`。
 
 ```c
-#include "core/nx_queue.h"
+#include "nx_queue.h"
 
 int        storage[4];            /* caller-owned backing storage */
 nx_queue_t q;
@@ -129,7 +132,7 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 - **辅助函数** —— `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`。
 
 ```c
-#include "core/nx_ringbuf.h"
+#include "nx_ringbuf.h"
 
 uint8_t      storage[64];      /* caller-owned backing storage */
 nx_ringbuf_t rb;
@@ -170,7 +173,7 @@ if (src != NULL) {
 - **非线程安全** —— 并发访问必须由调用者加锁。
 
 ```c
-#include "core/nx_tiered_mem_pool.h"
+#include "nx_tiered_mem_pool.h"
 
 /* no special alignment needed; oversize it and let init report the exact need */
 static uint8_t mem[32 * 8 + 128 * 4];
@@ -219,7 +222,7 @@ nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from 
 - **非线程安全** —— 引用计数是普通计数器；并发访问必须由调用者加锁。
 
 ```c
-#include "core/nx_ref_msg.h"
+#include "nx_ref_msg.h"
 
 /* one consumer queue (its buffer holds message pointers) */
 nx_ref_msg_t *qbuf[4];
@@ -265,7 +268,7 @@ tick 计数器不断前进（来自硬件定时器、RTOS tick 或主循环）�
 - **非线程安全** —— 若定时器的启动/停止与 `mgr_process` 处于不同上下文，需自行串行化访问。
 
 ```c
-#include "core/nx_timer.h"
+#include "nx_timer.h"
 
 static void led_blink(nx_timer_t *t, void *arg) {
     int *state = (int *)arg;
@@ -308,8 +311,8 @@ for (uint32_t tick = 0; tick < 100; tick++) {
   因此同样的调用点在单线程构建中会被编译成空。
 
 ```c
-#include "core/nx_lock.h"
-#include "core/nx_queue.h"
+#include "nx_lock.h"
+#include "nx_queue.h"
 
 /* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
 static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
@@ -348,7 +351,7 @@ nx_lock_exit(&g_lock, s);
 - **仅头文件** —— 每个辅助函数都是 `static inline`；只需包含头文件，无需编译或链接。
 
 ```c
-#include "middleware/nx_can_bus.h"
+#include "nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -400,7 +403,7 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
   不依赖其他模块。
 
 ```c
-#include "middleware/nx_modbus_rtu.h"
+#include "nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];
@@ -440,7 +443,7 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
   为空操作；存储由调用者拥有，库不使用任何动态内存。
 
 ```c
-#include "algo/nx_crc.h"
+#include "nx_crc.h"
 
 const char *msg = "123456789";
 
@@ -479,7 +482,7 @@ uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
 - **纯哈希，而非 MAC** —— 若需消息认证，在其之上构建 HMAC-SHA256。
 
 ```c
-#include "algo/nx_sha256.h"
+#include "nx_sha256.h"
 
 uint8_t digest[NX_SHA256_DIGEST_SIZE];
 
@@ -499,7 +502,7 @@ nx_sha256_final(&ctx, digest);
 
 库的源码按类别组织（`core/`、`middleware/`、`algo/`），可以直接拖进你的项目 —— 
 只需编译 `.c` 文件并把项目根目录加入包含路径（`-I.`），这样 
-`#include "core/nx_list.h"` 这样带目录前缀的包含就能正常工作。
+`#include "nx_list.h"` 这样带目录前缀的包含就能正常工作。
 
 `examples/basic/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以
 相同方式构建。

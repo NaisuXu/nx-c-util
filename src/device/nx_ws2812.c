@@ -2,7 +2,7 @@
  * @file    nx_ws2812.c
  * @brief   Implementation of the nx_ws2812 LED strip driver (no dynamic memory).
  */
-#include "device/nx_ws2812.h"
+#include "nx_ws2812.h"
 
 #include <string.h>
 

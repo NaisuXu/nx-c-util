@@ -27,8 +27,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "core/nx_queue.h"
-#include "core/nx_tiered_mem_pool.h"
+#include "nx_queue.h"
+#include "nx_tiered_mem_pool.h"
 
 #ifdef __cplusplus
 extern "C" {

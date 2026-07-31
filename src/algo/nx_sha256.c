@@ -7,7 +7,7 @@
  * Partial blocks are staged in the context so data can be fed in arbitrary
  * chunks. Message length is tracked in bits for the final padding.
  */
-#include "algo/nx_sha256.h"
+#include "nx_sha256.h"
 
 #include <string.h>
 

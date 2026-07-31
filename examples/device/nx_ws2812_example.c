@@ -15,7 +15,7 @@
  * check that the encoding is what WS2812 expects.
  */
 #include "nx_device_examples.h"
-#include "device/nx_ws2812.h"
+#include "src/device/nx_ws2812.h"
 
 #include <stdio.h>
 #include <string.h>

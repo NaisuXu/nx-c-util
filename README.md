@@ -21,16 +21,20 @@ Every component follows the same design philosophy:
 
 ```
 nx-c-util/
-├── core/         # Core building blocks (list, queue, ringbuf, timer, ref_msg, mem_pool, lock)
-├── middleware/   # Protocol parsers and stacks (modbus_rtu, can_bus, future: modbus_rtu_slave, can_isotp)
-├── algo/         # Algorithms (crc, sha256)
-├── device/       # Platform-independent device drivers (future)
+├── src/
+│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, ref_msg, mem_pool, lock)
+│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, can_bus, future: modbus_rtu_slave, can_isotp)
+│   ├── algo/         # Algorithms (crc, sha256)
+│   └── device/       # Platform-independent device drivers (ws2812)
 └── examples/
-    └── basic/    # Basic component usage examples
+    ├── core/         # Core and algorithm usage examples
+    └── device/       # Device driver usage examples
 ```
 
-All includes use directory prefixes: `#include "core/nx_list.h"`. Add `-I.` to
-your compiler flags so the root directory is in the include path.
+Each module is designed to be independently usable. To integrate into your project,
+simply copy the needed `.c` and `.h` files. Headers use single-level includes 
+(e.g., `#include "nx_list.h"`) with no subdirectory prefix, so add the directory 
+containing the copied files to your include path.
 
 ## Modules
 
@@ -59,7 +63,7 @@ deletes have no head/tail special cases.
 - **Header-only** — all operations are `static inline`.
 
 ```c
-#include "core/nx_list.h"
+#include "nx_list.h"
 
 typedef struct task {
     int         id;
@@ -102,7 +106,7 @@ A fixed-capacity FIFO queue backed by a caller-provided buffer.
   `is_empty` / `is_full`.
 
 ```c
-#include "core/nx_queue.h"
+#include "nx_queue.h"
 
 int        storage[4];            /* caller-owned backing storage */
 nx_queue_t q;
@@ -145,7 +149,7 @@ is the natural fit for serial I/O (UART RX/TX) and other streaming data.
 - **Helpers** — `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`.
 
 ```c
-#include "core/nx_ringbuf.h"
+#include "nx_ringbuf.h"
 
 uint8_t      storage[64];      /* caller-owned backing storage */
 nx_ringbuf_t rb;
@@ -191,7 +195,7 @@ several "tiers" of equally sized blocks carved out of one caller-provided buffer
 - **Not thread-safe** — concurrent access must be locked by the caller.
 
 ```c
-#include "core/nx_tiered_mem_pool.h"
+#include "nx_tiered_mem_pool.h"
 
 /* no special alignment needed; oversize it and let init report the exact need */
 static uint8_t mem[32 * 8 + 128 * 4];
@@ -250,7 +254,7 @@ reference count decides when the block goes back to the pool.
   locked by the caller.
 
 ```c
-#include "core/nx_ref_msg.h"
+#include "nx_ref_msg.h"
 
 /* one consumer queue (its buffer holds message pointers) */
 nx_ref_msg_t *qbuf[4];
@@ -301,7 +305,7 @@ PC.
   from a different context than `mgr_process`.
 
 ```c
-#include "core/nx_timer.h"
+#include "nx_timer.h"
 
 static void led_blink(nx_timer_t *t, void *arg) {
     int *state = (int *)arg;
@@ -349,8 +353,8 @@ refcount change).
   nothing, so the same call sites compile to nothing on a single-threaded build.
 
 ```c
-#include "core/nx_lock.h"
-#include "core/nx_queue.h"
+#include "nx_lock.h"
+#include "nx_queue.h"
 
 /* Cortex-M bare metal: disable interrupts, saving/restoring PRIMASK */
 static uintptr_t cm_enter(void *ctx) { (void)ctx; uint32_t p = __get_PRIMASK(); __disable_irq(); return p; }
@@ -398,7 +402,7 @@ context.
   nothing to compile or link.
 
 ```c
-#include "middleware/nx_can_bus.h"
+#include "nx_can_bus.h"
 
 /* a received CAN FD frame carrying 16 bytes */
 uint8_t          buf[sizeof(nx_can_msg_t) + 16];
@@ -456,7 +460,7 @@ small lookup table, so this module has a `.c` file.
   the header; only the CRC lives in the `.c`. No dependency on the other modules.
 
 ```c
-#include "middleware/nx_modbus_rtu.h"
+#include "nx_modbus_rtu.h"
 
 /* build a "read holding registers" request: addr 1, start 0x0000, count 10 */
 uint8_t buf[8];
@@ -503,7 +507,7 @@ store and every call is deterministic.
   storage is caller-owned and the library uses no dynamic memory.
 
 ```c
-#include "algo/nx_crc.h"
+#include "nx_crc.h"
 
 const char *msg = "123456789";
 
@@ -546,7 +550,7 @@ A pure-C SHA-256 (FIPS 180-4) implementation producing a 32-byte digest.
   top of it.
 
 ```c
-#include "algo/nx_sha256.h"
+#include "nx_sha256.h"
 
 uint8_t digest[NX_SHA256_DIGEST_SIZE];
 
@@ -568,7 +572,7 @@ nx_sha256_final(&ctx, digest);
 The library sources are organized by category (`core/`, `middleware/`, `algo/`) 
 and can be dropped directly into your project — just compile the `.c` files and 
 add the project root to your include path with `-I.` so directory-prefixed 
-includes like `#include "core/nx_list.h"` work.
+includes like `#include "nx_list.h"` work.
 
 The `examples/basic/` directory contains runnable usage examples for every module,
 driven through CMake so they build the same way on any platform.

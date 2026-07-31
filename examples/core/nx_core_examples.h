@@ -1,12 +1,12 @@
 /**
- * @file    nx_basic_examples.h
+ * @file    nx_core_examples.h
  * @brief   Entry points for the per-component example/test routines.
  *
- * Each nx-c-util component has its own example file; nx_basic_examples.c runs
+ * Each nx-c-util component has its own example file; nx_core_examples.c runs
  * them in turn.
  */
-#ifndef NX_BASIC_EXAMPLES_H
-#define NX_BASIC_EXAMPLES_H
+#ifndef NX_CORE_EXAMPLES_H
+#define NX_CORE_EXAMPLES_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,4 +40,4 @@ int nx_sha256_example_run(void);
 }
 #endif
 
-#endif /* NX_BASIC_EXAMPLES_H */
+#endif /* NX_CORE_EXAMPLES_H */

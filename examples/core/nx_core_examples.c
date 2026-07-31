@@ -1,5 +1,5 @@
 /**
- * @file    nx_basic_examples.c
+ * @file    nx_core_examples.c
  * @brief   Example driver: runs each nx-c-util component's examples in turn.
  *
  * The actual examples live in per-component files:
@@ -12,7 +12,7 @@
  *   - nx_crc_example.c            -> nx_crc_example_run()
  *   - nx_sha256_example.c         -> nx_sha256_example_run()
  */
-#include "nx_basic_examples.h"
+#include "nx_core_examples.h"
 
 #include <stdio.h>
 

@@ -10,8 +10,8 @@
  *
  * The ring buffer never allocates: every example provides its own static buffer.
  */
-#include "nx_basic_examples.h"
-#include "core/nx_ringbuf.h"
+#include "nx_core_examples.h"
+#include "src/core/nx_ringbuf.h"
 
 #include <stdio.h>
 #include <string.h>

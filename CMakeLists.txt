@@ -12,37 +12,37 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # Library sources
 set(NX_CORE_SOURCES
-    core/nx_queue.c
-    core/nx_ringbuf.c
-    core/nx_tiered_mem_pool.c
-    core/nx_ref_msg.c
-    core/nx_timer.c
+    src/core/nx_queue.c
+    src/core/nx_ringbuf.c
+    src/core/nx_tiered_mem_pool.c
+    src/core/nx_ref_msg.c
+    src/core/nx_timer.c
 )
 
 set(NX_ALGO_SOURCES
-    algo/nx_crc.c
-    algo/nx_sha256.c
+    src/algo/nx_crc.c
+    src/algo/nx_sha256.c
 )
 
 set(NX_MIDDLEWARE_SOURCES
-    middleware/nx_modbus_rtu.c
+    src/middleware/nx_modbus_rtu.c
 )
 
 set(NX_DEVICE_SOURCES
-    device/nx_ws2812.c
+    src/device/nx_ws2812.c
 )
 
-# Basic examples executable
-add_executable(nx_basic_examples
-    examples/basic/nx_basic_examples.c
-    examples/basic/nx_list_example.c
-    examples/basic/nx_queue_example.c
-    examples/basic/nx_ringbuf_example.c
-    examples/basic/nx_tiered_mem_pool_example.c
-    examples/basic/nx_ref_msg_example.c
-    examples/basic/nx_timer_example.c
-    examples/basic/nx_crc_example.c
-    examples/basic/nx_sha256_example.c
+# Core examples executable
+add_executable(nx_core_examples
+    examples/core/nx_core_examples.c
+    examples/core/nx_list_example.c
+    examples/core/nx_queue_example.c
+    examples/core/nx_ringbuf_example.c
+    examples/core/nx_tiered_mem_pool_example.c
+    examples/core/nx_ref_msg_example.c
+    examples/core/nx_timer_example.c
+    examples/core/nx_crc_example.c
+    examples/core/nx_sha256_example.c
     ${NX_CORE_SOURCES}
     ${NX_ALGO_SOURCES}
 )
@@ -55,6 +55,6 @@ add_executable(nx_device_examples
 )
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(nx_basic_examples PRIVATE -Wall -Wextra)
+    target_compile_options(nx_core_examples PRIVATE -Wall -Wextra)
     target_compile_options(nx_device_examples PRIVATE -Wall -Wextra)
 endif()
