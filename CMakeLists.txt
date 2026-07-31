@@ -28,6 +28,10 @@ set(NX_MIDDLEWARE_SOURCES
     middleware/nx_modbus_rtu.c
 )
 
+set(NX_DEVICE_SOURCES
+    device/nx_ws2812.c
+)
+
 # Basic examples executable
 add_executable(nx_basic_examples
     examples/basic/nx_basic_examples.c
@@ -43,6 +47,13 @@ add_executable(nx_basic_examples
     ${NX_ALGO_SOURCES}
 )
 
+# Device examples executable
+add_executable(nx_device_examples
+    examples/device/nx_ws2812_example.c
+    ${NX_DEVICE_SOURCES}
+)
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(nx_basic_examples PRIVATE -Wall -Wextra)
+    target_compile_options(nx_device_examples PRIVATE -Wall -Wextra)
 endif()

@@ -6,8 +6,6 @@
 
 #include <string.h>
 
-/* PLACEHOLDER_BODY */
-
 bool nx_ringbuf_init(nx_ringbuf_t *rb, void *buffer, size_t capacity)
 {
     if (rb == NULL || buffer == NULL || capacity == 0U) {
