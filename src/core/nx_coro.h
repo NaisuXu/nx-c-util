@@ -40,9 +40,9 @@ typedef struct {
 
 #define NX_CORO_TIMEDWAIT(coro_stack, ticks) do { if ((coro_stack)->get_tick != NULL) { NX_CORO_WAIT_UNTIL(coro_stack, (coro_stack)->get_tick() - (coro_stack)->ticks >= ticks); } } while(0)
 
-#define NX_CORO_SCHEDULE(coro_stack_expr)	((coro_stack_expr) < NX_CORO_ENDED)
+#define NX_CORO_SCHEDULE(coro_expr)	((coro_expr) < NX_CORO_ENDED)
 
-#define NX_CORO_SPAWN(coro_stack, sub_coro_stack, coro_stack_expr) do { NX_CORO_INIT(sub_coro_stack, (coro_stack)->get_tick); NX_CORO_WAIT_WHILE((coro_stack), NX_CORO_SCHEDULE(coro_stack_expr)); } while(0)
+#define NX_CORO_SPAWN(coro_stack, sub_coro_stack, sub_coro_expr) do { NX_CORO_INIT(sub_coro_stack, (coro_stack)->get_tick); NX_CORO_WAIT_WHILE((coro_stack), NX_CORO_SCHEDULE(sub_coro_expr)); } while(0)
 
 #ifdef __cplusplus
 }
