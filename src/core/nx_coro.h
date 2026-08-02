@@ -22,11 +22,13 @@ typedef struct {
 
 #define NX_CORO_INIT(coro_stack, get_tick_func) do { (coro_stack)->lc = 0; (coro_stack)->get_tick = (get_tick_func); } while(0)
 
+#define NX_CORO_REINIT(coro_stack) do { (coro_stack)->lc = 0; } while(0)
+
 #define NX_CORO_BEGIN(coro_stack) switch((coro_stack)->lc) { case 0:
 
-#define NX_CORO_END(coro_stack) default: ; } (coro_stack)->lc = 0; return NX_CORO_ENDED;
+#define NX_CORO_END(coro_stack) default: ; } (coro_stack)->lc = 65535; return NX_CORO_ENDED;
 
-#define NX_CORO_EXIT(coro_stack) do { (coro_stack)->lc = 0; return NX_CORO_EXITED; } while(0)
+#define NX_CORO_EXIT(coro_stack) do { (coro_stack)->lc = 65535; return NX_CORO_EXITED; } while(0)
 
 #define NX_CORO_YIELD(coro_stack) do { (coro_stack)->lc = __LINE__; return NX_CORO_YIELDED; case __LINE__: ; } while(0)
 
