@@ -16,9 +16,13 @@ typedef enum {
 
 typedef struct {
   uint16_t lc;
+} nx_coro_stack_t;
+
+typedef struct {
+  uint16_t lc;
   size_t ticks;
   size_t (*get_tick)(void);
-} nx_coro_stack_t;
+} nx_coro_stack_with_tick_t;
 
 #define NX_CORO_INIT(coro_stack, get_tick_func) do { (coro_stack)->lc = 0; (coro_stack)->get_tick = (get_tick_func); } while(0)
 
