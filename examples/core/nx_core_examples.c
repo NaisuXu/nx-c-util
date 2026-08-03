@@ -9,6 +9,7 @@
  *   - nx_tiered_mem_pool_example.c  -> nx_tiered_mem_pool_example_run()
  *   - nx_ref_msg_example.c        -> nx_ref_msg_example_run()
  *   - nx_timer_example.c          -> nx_timer_example_run()
+ *   - nx_coro_example.c           -> nx_coro_example_run()
  */
 #include "nx_core_examples.h"
 
@@ -24,6 +25,7 @@ int main(void)
     rc |= nx_tiered_mem_pool_example_run();
     rc |= nx_ref_msg_example_run();
     rc |= nx_timer_example_run();
+    rc |= nx_coro_example_run();
 
     return rc;
 }

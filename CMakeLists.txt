@@ -7,7 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Include path: project root so "core/nx_list.h" works
+# Include path: project root so "src/core/nx_list.h" works
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # Library sources
@@ -41,6 +41,7 @@ add_executable(nx_core_examples
     examples/core/nx_tiered_mem_pool_example.c
     examples/core/nx_ref_msg_example.c
     examples/core/nx_timer_example.c
+    examples/core/nx_coro_example.c
     ${NX_CORE_SOURCES}
 )
 
@@ -60,7 +61,7 @@ add_executable(nx_device_examples
 )
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(nx_core_examples PRIVATE -Wall -Wextra)
-    target_compile_options(nx_algo_examples PRIVATE -Wall -Wextra)
-    target_compile_options(nx_device_examples PRIVATE -Wall -Wextra)
+    target_compile_options(nx_core_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
+    target_compile_options(nx_algo_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
+    target_compile_options(nx_device_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
 endif()

@@ -258,6 +258,62 @@ for (uint32_t tick = 0; tick < 100; tick++) {
 ```
 
 
+### nx_coro —— 无栈协程
+
+一组仅头文件的宏，基于 Duff's device 和 `__LINE__`，让一个普通的 C 函数能在中途挂起、
+并在下次调用时从原处恢复。这使得“发送、等待应答、重试”这类时序可以写成顺序代码，而不必
+展开成显式状态机 —— 不需要 RTOS，也不需要为每个任务分配一份栈。
+
+- **无栈** —— 跨越挂起点只保存一个行号。整个协程状态就是调用者持有的一到三个字的结构体：
+  没有每协程的栈，没有上下文切换，没有分配。
+- **从不阻塞** —— 协程在每个挂起点返回给调用者。模块本身不含调度器；应用的主循环就是
+  调度器，反复调用每个协程推动它前进。
+- **按时间或按条件挂起** —— `NX_CORO_YIELD` 主动让出一次；`NX_CORO_WAIT_UNTIL` /
+  `NX_CORO_WAIT_WHILE` 按谓词挂起；`NX_CORO_SLEEP` / `NX_CORO_TIMEDSET` /
+  `NX_CORO_TIMEDWAIT` 基于调用者提供的 tick 源挂起。
+- **两种状态类型** —— `nx_coro_stack_t` 用于让出和条件等待；`nx_coro_stack_plus_t`
+  用 `NX_CORO_INIT_PLUS` 初始化，额外带上时间类宏所需的 tick 源。
+- **可组合** —— `NX_CORO_SCHEDULE` 报告协程是否仍在运行，因此父协程只需等待子协程即可
+  驱动它运行到结束。
+
+以下限制都源自基于 `switch` 的实现：局部变量活不过挂起点（需要保留的状态放进结构体）；
+`BEGIN` 与 `END` 之间不能写你自己的 `switch`；每行源码最多一个挂起点；挂起点必须在词法上
+位于同一个函数内；写在 `NX_CORO_BEGIN` 之前的代码每次调用都会执行。
+
+```c
+#include "nx_coro.h"
+
+/* 需要跨越挂起点保留的状态放在结构体里，而不是局部变量 */
+typedef struct {
+    nx_coro_stack_t base;
+    int             step;
+} blink_t;
+
+static nx_coro_ret_t blink(blink_t *st) {
+    NX_CORO_BEGIN(&st->base);
+    while (1) {
+        printf("step %d\n", ++st->step);
+        NX_CORO_YIELD(&st->base);   /* 此处返回，下次调用从这里恢复 */
+    }
+    NX_CORO_END(&st->base);
+}
+
+blink_t a = {0}, b = {0};
+NX_CORO_INIT(&a.base);
+NX_CORO_INIT(&b.base);
+
+/* 主循环就是调度器：跑一趟让每个协程各推进一步 */
+for (;;) {
+    blink(&a);
+    blink(&b);
+}
+```
+
+> **注意：** 一个恢复点展开为 `lc = __LINE__; case __LINE__:`，GCC/Clang 会认为这是一个
+> 缺少 `break` 的 case 穿越。而 switch 只会跳到这些标签上，那种穿越不可能发生 —— 如果你
+> 使用 `-Wextra`，请加上 `-Wno-implicit-fallthrough`。
+
+
 ### nx_lock —— 可插拔的临界区抽象
 
 其他模块刻意做成无锁 —— 它们不持有任何锁，把同步交给调用者。`nx_lock` 是提供同步的

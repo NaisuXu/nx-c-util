@@ -19,7 +19,7 @@
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # 核心构件（list, queue, ringbuf, timer, ref_msg, mem_pool, lock）
+│   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock）
 │   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, can_bus，未来：modbus_rtu_slave, can_isotp）
 │   ├── algo/         # 算法（crc, sha256）
 │   └── device/       # 平台无关的设备驱动（ws2812）
@@ -42,6 +42,7 @@ nx-c-util/
 - [nx_tiered_mem_pool](docs/core_cn.md#nx_tiered_mem_pool--分级静态内存池) — 分级静态内存池
 - [nx_ref_msg](docs/core_cn.md#nx_ref_msg--引用计数的零拷贝消息) — 引用计数的零拷贝消息
 - [nx_timer](docs/core_cn.md#nx_timer--软件定时器管理器) — 软件定时器管理器
+- [nx_coro](docs/core_cn.md#nx_coro--无栈协程) — 无栈协程
 - [nx_lock](docs/core_cn.md#nx_lock--可插拔的临界区抽象) — 可插拔的临界区抽象
 
 详细说明和示例请参阅[核心模块文档](docs/core_cn.md)。
@@ -88,7 +89,7 @@ cmake --build build
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer）
+  ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer, coro）
   ./build/nx_algo_examples        # 算法模块（crc, sha256）
   ./build/nx_device_examples      # 设备驱动（ws2812）
   ```

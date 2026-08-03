@@ -299,6 +299,71 @@ for (uint32_t now = 0; now < 200; now++) {
 ```
 
 
+## nx_coro — stackless coroutines
+
+A header-only set of macros that let an ordinary C function suspend in the
+middle and resume there on the next call, built on Duff's device and `__LINE__`.
+That turns a sequence like "send, wait for the reply, retry" into straight-line
+code instead of an explicit state machine, without an RTOS and without a stack
+per task.
+
+- **Stackless** — nothing is saved across a suspend point except one line
+  number. The whole coroutine state is a caller-owned struct of one to three
+  words: no per-coroutine stack, no context switch, no allocation.
+- **Never blocks** — a coroutine returns to its caller at every suspend point.
+  There is no scheduler in the module; the application's main loop is the
+  scheduler, calling each coroutine again and again.
+- **Suspend on time or on a condition** — `NX_CORO_YIELD` gives up a turn,
+  `NX_CORO_WAIT_UNTIL` / `NX_CORO_WAIT_WHILE` suspend on a predicate, and
+  `NX_CORO_SLEEP` / `NX_CORO_TIMEDSET` / `NX_CORO_TIMEDWAIT` suspend on a
+  caller-supplied tick source.
+- **Two state types** — `nx_coro_stack_t` for yield and condition waits;
+  `nx_coro_stack_plus_t`, initialized with `NX_CORO_INIT_PLUS`, adds the tick
+  source the time-based macros need.
+- **Composable** — `NX_CORO_SCHEDULE` reports whether a coroutine is still
+  running, so a parent runs a child to completion by waiting on it.
+
+Restrictions follow from the `switch`-based implementation: locals do not
+survive a suspend point (persistent state goes in the struct), you cannot write
+a `switch` of your own between `BEGIN` and `END`, there is at most one suspend
+point per source line, suspend points must be lexically inside the same
+function, and code placed before `NX_CORO_BEGIN` runs on every call.
+
+```c
+#include "nx_coro.h"
+
+/* state that must survive a suspend point lives in the struct, not in locals */
+typedef struct {
+    nx_coro_stack_t base;
+    int             step;
+} blink_t;
+
+static nx_coro_ret_t blink(blink_t *st) {
+    NX_CORO_BEGIN(&st->base);
+    while (1) {
+        printf("step %d\n", ++st->step);
+        NX_CORO_YIELD(&st->base);   /* returns now, resumes here next call */
+    }
+    NX_CORO_END(&st->base);
+}
+
+blink_t a = {0}, b = {0};
+NX_CORO_INIT(&a.base);
+NX_CORO_INIT(&b.base);
+
+/* the main loop is the scheduler: one pass advances each coroutine one step */
+for (;;) {
+    blink(&a);
+    blink(&b);
+}
+```
+
+> **Note:** a resume point expands to `lc = __LINE__; case __LINE__:`, which
+> GCC/Clang read as a case falling through for want of a `break`. The switch
+> only ever jumps to those labels, so that fallthrough cannot happen — build
+> with `-Wno-implicit-fallthrough` if you use `-Wextra`.
+
+
 ## nx_lock — pluggable critical-section abstraction
 
 A minimal portability shim: the core modules that need mutual exclusion

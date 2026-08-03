@@ -22,7 +22,7 @@ Every component follows the same design philosophy:
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, ref_msg, mem_pool, lock)
+│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock)
 │   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, can_bus, future: modbus_rtu_slave, can_isotp)
 │   ├── algo/         # Algorithms (crc, sha256)
 │   └── device/       # Platform-independent device drivers (ws2812)
@@ -46,6 +46,7 @@ containing the copied files to your include path.
 - [nx_tiered_mem_pool](docs/core_en.md#nx_tiered_mem_pool--tiered-static-memory-pool) — tiered static memory pool
 - [nx_ref_msg](docs/core_en.md#nx_ref_msg--reference-counted-zero-copy-messages) — reference-counted zero-copy messages
 - [nx_timer](docs/core_en.md#nx_timer--software-timer-manager) — software timer manager
+- [nx_coro](docs/core_en.md#nx_coro--stackless-coroutines) — stackless coroutines
 - [nx_lock](docs/core_en.md#nx_lock--pluggable-critical-section-abstraction) — pluggable critical-section abstraction
 
 See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and examples.
@@ -94,7 +95,7 @@ Then run the produced executables:
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer)
+  ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer, coro)
   ./build/nx_algo_examples        # Algorithm modules (crc, sha256)
   ./build/nx_device_examples      # Device drivers (ws2812)
   ```
