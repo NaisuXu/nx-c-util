@@ -316,7 +316,8 @@ per task.
 - **Suspend on time or on a condition** — `NX_CORO_YIELD` gives up a turn,
   `NX_CORO_WAIT_UNTIL` / `NX_CORO_WAIT_WHILE` suspend on a predicate, and
   `NX_CORO_SLEEP` / `NX_CORO_TIMEDSET` / `NX_CORO_TIMEDWAIT` suspend on a
-  caller-supplied tick source.
+  caller-supplied tick source — a `uint32_t (*)(void)` monotonic counter, with
+  wrap-around handled by unsigned differences.
 - **Two state types** — `nx_coro_stack_t` for yield and condition waits;
   `nx_coro_stack_plus_t`, initialized with `NX_CORO_INIT_PLUS`, adds the tick
   source the time-based macros need.

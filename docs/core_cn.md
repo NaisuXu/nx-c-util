@@ -270,7 +270,8 @@ for (uint32_t tick = 0; tick < 100; tick++) {
   调度器，反复调用每个协程推动它前进。
 - **按时间或按条件挂起** —— `NX_CORO_YIELD` 主动让出一次；`NX_CORO_WAIT_UNTIL` /
   `NX_CORO_WAIT_WHILE` 按谓词挂起；`NX_CORO_SLEEP` / `NX_CORO_TIMEDSET` /
-  `NX_CORO_TIMEDWAIT` 基于调用者提供的 tick 源挂起。
+  `NX_CORO_TIMEDWAIT` 基于调用者提供的 tick 源挂起 —— tick 源是一个
+  `uint32_t (*)(void)` 单调计数器，回绕由无符号差值处理。
 - **两种状态类型** —— `nx_coro_stack_t` 用于让出和条件等待；`nx_coro_stack_plus_t`
   用 `NX_CORO_INIT_PLUS` 初始化，额外带上时间类宏所需的 tick 源。
 - **可组合** —— `NX_CORO_SCHEDULE` 报告协程是否仍在运行，因此父协程只需等待子协程即可

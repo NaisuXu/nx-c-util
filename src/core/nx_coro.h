@@ -44,9 +44,9 @@ typedef struct {
 
 /** Coroutine state with a tick source; required by the time-based macros. */
 typedef struct {
-    uint16_t lc;               /**< Resume point: 0 = not started, else a __LINE__ */
-    size_t (*get_tick)(void);  /**< Tick source; NULL disables the time macros */
-    size_t   ticks;            /**< Reference timestamp of the pending sleep/timeout */
+    uint16_t lc;                 /**< Resume point: 0 = not started, else a __LINE__ */
+    uint32_t (*get_tick)(void);  /**< Tick source; NULL disables the time macros */
+    uint32_t ticks;              /**< Reference timestamp of the pending sleep/timeout */
 } nx_coro_stack_plus_t;
 
 /** Reset an nx_coro_stack_t so the next call starts from the top. */

@@ -156,10 +156,11 @@ static void example_nesting(void)
 /* ------------------------------------------------------------------ */
 
 /* A simulated tick source. On real hardware this would read a SysTick or RTOS
- * counter; here the example loop advances it, one tick per poll. */
-static size_t g_tick;
+ * counter; here the example loop advances it, one tick per poll. A 32-bit tick
+ * matches nx_coro_stack_plus_t::get_tick and gives a platform-independent range. */
+static uint32_t g_tick;
 
-static size_t sim_get_tick(void)
+static uint32_t sim_get_tick(void)
 {
     return g_tick;
 }
@@ -171,18 +172,18 @@ static nx_coro_ret_t coro_paced(nx_coro_stack_plus_t *cs)
     NX_CORO_BEGIN(cs);
 
     /* Relative delay: stamps "now" on arrival, then waits 3 ticks. */
-    printf("    coro_paced: sleeping 3 ticks (tick %zu)\n", sim_get_tick());
+    printf("    coro_paced: sleeping 3 ticks (tick %u)\n", (unsigned)sim_get_tick());
     NX_CORO_SLEEP(cs, 3);
-    printf("    coro_paced: woke up at tick %zu\n", sim_get_tick());
+    printf("    coro_paced: woke up at tick %u\n", (unsigned)sim_get_tick());
 
     /* Reference-based delay: arm the reference, do work, then wait out the
      * remainder of the interval. Time spent working counts toward the 5 ticks,
      * which is what makes this a period rather than another sleep. */
     NX_CORO_TIMEDSET(cs);
-    printf("    coro_paced: armed at tick %zu, working\n", sim_get_tick());
+    printf("    coro_paced: armed at tick %u, working\n", (unsigned)sim_get_tick());
     NX_CORO_YIELD(cs);                  /* stand-in for one step of real work */
     NX_CORO_TIMEDWAIT(cs, 5);
-    printf("    coro_paced: 5 ticks since arming (tick %zu)\n", sim_get_tick());
+    printf("    coro_paced: 5 ticks since arming (tick %u)\n", (unsigned)sim_get_tick());
 
     NX_CORO_END(cs);
 }
@@ -197,9 +198,9 @@ static void example_time(void)
     g_tick = 0;
     while (NX_CORO_SCHEDULE(coro_paced(&cs))) {
         g_tick++;                       /* stands in for the tick interrupt */
-        printf("  tick %zu\n", g_tick);
+        printf("  tick %u\n", (unsigned)g_tick);
     }
-    printf("  coro_paced finished at tick %zu\n\n", g_tick);
+    printf("  coro_paced finished at tick %u\n\n", (unsigned)g_tick);
 }
 
 /* ------------------------------------------------------------------ */
@@ -230,13 +231,13 @@ static nx_coro_ret_t coro_request(request_t *st)
         printf("    coro_request: timed out, giving up\n");
         NX_CORO_EXIT(&st->base);        /* finishes as NX_CORO_EXITED */
     }
-    printf("    coro_request: reply received at tick %zu\n", sim_get_tick());
+    printf("    coro_request: reply received at tick %u\n", (unsigned)sim_get_tick());
 
     NX_CORO_END(&st->base);             /* finishes as NX_CORO_ENDED */
 }
 
 /* Run one request; the reply arrives at reply_tick, or never if it is 0. */
-static void run_request(const char *title, size_t reply_tick)
+static void run_request(const char *title, uint32_t reply_tick)
 {
     printf("  %s:\n", title);
 
@@ -250,9 +251,9 @@ static void run_request(const char *title, size_t reply_tick)
         g_tick++;
         if (reply_tick != 0 && g_tick == reply_tick) {
             reply = 1;
-            printf("    tick %zu: reply arrives\n", g_tick);
+            printf("    tick %u: reply arrives\n", (unsigned)g_tick);
         } else {
-            printf("    tick %zu\n", g_tick);
+            printf("    tick %u\n", (unsigned)g_tick);
         }
     }
 
