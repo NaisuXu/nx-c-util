@@ -2,12 +2,11 @@
 
 ## nx_list — intrusive doubly-linked circular list
 
-A header-only intrusive list (Linux `list_head` style). Where `nx_queue` tracks
-standalone elements by copying them, `nx_list` embeds a link node directly in
-the user's struct, so adding an item to the list only moves pointers — no copy,
-no allocation, and the user struct stays exactly where it was allocated. A
-doubly-linked circular layout (the sentinel head forms a ring) means inserts and
-deletes have no head/tail special cases.
+A header-only intrusive list (Linux `list_head` style). The user embeds a link
+node directly in their struct, so adding an item to the list only moves pointers
+— no copy, no allocation, and the user struct stays exactly where it was
+allocated. A doubly-linked circular layout (the sentinel head forms a ring)
+means inserts and deletes have no head/tail special cases.
 
 - **Intrusive** — the user embeds `nx_list_t` in their struct; `nx_list_entry`
   (a `container_of` macro) recovers the containing struct from the link.
@@ -89,10 +88,9 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 
 ## nx_ringbuf — byte-oriented ring buffer
 
-A byte-stream FIFO backed by a caller-provided buffer. Where `nx_queue` stores
-fixed-size *elements* with all-or-nothing push/pop, `nx_ringbuf` stores a raw
-*byte stream*: transfers move a variable number of bytes and may be partial. That
-is the natural fit for serial I/O (UART RX/TX) and other streaming data.
+A byte-stream FIFO backed by a caller-provided buffer. It stores a raw *byte
+stream*: transfers move a variable number of bytes and may be partial. That is
+the natural fit for serial I/O (UART RX/TX) and other streaming data.
 
 - **Byte stream, partial transfers** — `write` / `read` / `peek` / `discard`
   operate on byte counts and return how many bytes were actually moved; a write
@@ -211,9 +209,8 @@ does not need to know whether it holds the last reference — `drop` handles it)
 - **Lossless dispatch** — `deliver` pushes the message to one or more queues
   (ref-count incremented once per delivery), each queue draining into a
   different consumer. If a queue is full, `deliver` returns an error and does
-  not drop the message; the publisher can retry or discard. This differs from
-  "classic" pub/sub, which may silently drop slow consumers — here the caller
-  sees full queues and decides the policy.
+  not drop the message; the caller sees the full queue and decides the policy —
+  retry, discard, or apply backpressure.
 - **Pool exhaustion protection** — callers should size the pool and the queues so
   the total in-flight message memory never exceeds the pool; ref-counting means
   the pool self-drains as consumers finish with their copies, and when the pool
@@ -304,7 +301,7 @@ for (uint32_t now = 0; now < 200; now++) {
 A header-only set of macros that let an ordinary C function suspend in the
 middle and resume there on the next call, built on Duff's device and `__LINE__`.
 That turns a sequence like "send, wait for the reply, retry" into straight-line
-code instead of an explicit state machine, without an RTOS and without a stack
+code, without an RTOS and without a stack
 per task.
 
 - **Stackless** — nothing is saved across a suspend point except one line

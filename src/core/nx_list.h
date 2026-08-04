@@ -3,9 +3,8 @@
  * @brief   Intrusive doubly-linked circular list, in pure C.
  *
  * An intrusive list embeds the link node (nx_list_t) directly into the user's
- * structure, rather than wrapping the user data in a separate allocated node.
- * This gives zero-allocation list operations: the node lives wherever the
- * containing structure lives.
+ * structure. This gives zero-allocation list operations: the node lives wherever
+ * the containing structure lives, so adding an element only moves pointers.
  *
  * The list is doubly-linked (each node has prev/next) and circular: the head
  * node (sentinel) forms a ring with itself when empty, and the last node's next

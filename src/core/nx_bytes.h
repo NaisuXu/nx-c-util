@@ -11,7 +11,7 @@
  *   - Static inline: zero call overhead, fully optimized by modern compilers.
  *   - No parameter checks: assumes valid inputs; treats NULL/invalid as undefined
  *     behavior (same as standard library functions).
- *   - Type-safe: unlike macros, the compiler performs full type checking.
+ *   - Type-safe: the compiler performs full type checking on the arguments.
  *   - Portable: standard C11, no platform-specific intrinsics.
  */
 #ifndef NX_BYTES_H

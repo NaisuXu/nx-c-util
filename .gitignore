@@ -1,6 +1,7 @@
 # ---- Build directories (CMake out-of-source builds) ----
 build/
 Build/
+build_mw/
 out/
 cmake-build-*/
 
