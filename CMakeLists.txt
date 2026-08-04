@@ -26,6 +26,7 @@ set(NX_ALGO_SOURCES
 
 set(NX_MIDDLEWARE_SOURCES
     src/middleware/nx_modbus_rtu.c
+    src/middleware/nx_modbus_rtu_slave.c
 )
 
 set(NX_DEVICE_SOURCES
@@ -60,8 +61,17 @@ add_executable(nx_device_examples
     ${NX_DEVICE_SOURCES}
 )
 
+# Middleware examples executable
+add_executable(nx_middleware_examples
+    examples/middleware/nx_middleware_examples.c
+    examples/middleware/nx_modbus_rtu_slave_example.c
+    ${NX_MIDDLEWARE_SOURCES}
+    ${NX_CORE_SOURCES}
+)
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(nx_core_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
     target_compile_options(nx_algo_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
     target_compile_options(nx_device_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
+    target_compile_options(nx_middleware_examples PRIVATE -Wall -Wextra -Wno-implicit-fallthrough)
 endif()

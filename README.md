@@ -23,11 +23,12 @@ Every component follows the same design philosophy:
 nx-c-util/
 ├── src/
 │   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock)
-│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, can_bus, future: modbus_rtu_slave, can_isotp)
+│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, can_bus, future: can_isotp)
 │   ├── algo/         # Algorithms (crc, sha256)
 │   └── device/       # Platform-independent device drivers (ws2812)
 └── examples/
     ├── core/         # Core module usage examples
+    ├── middleware/   # Middleware module usage examples
     ├── algo/         # Algorithm module usage examples
     └── device/       # Device driver usage examples
 ```
@@ -54,6 +55,7 @@ See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and 
 ### Middleware Modules
 - [nx_can_bus](docs/middleware_en.md#nx_can_bus--can--can-fd-frame-structures-and-helpers) — CAN / CAN FD frame structures and helpers
 - [nx_modbus_rtu](docs/middleware_en.md#nx_modbus_rtu--modbus-rtu-frame-structures-and-crc) — Modbus RTU frame structures and CRC
+- [nx_modbus_rtu_slave](docs/middleware_en.md#nx_modbus_rtu_slave--event-driven-rtu-slave-frame--subscription-dispatch) — event-driven RTU slave: frame → subscription dispatch
 
 See [Middleware Modules Documentation](docs/middleware_en.md) for detailed descriptions and examples.
 
@@ -77,8 +79,8 @@ project — most modules have no dependencies beyond standard C and can be used
 independently. Headers use single-level includes (e.g., `#include "nx_list.h"`), 
 so add the directory containing the copied files to your include path.
 
-The `examples/core/`, `examples/algo/`, and `examples/device/` directories 
-contain runnable usage examples for every module, driven through CMake so they 
+The `examples/core/`, `examples/middleware/`, `examples/algo/`, and `examples/device/` 
+directories contain runnable usage examples for every module, driven through CMake so they 
 build the same way on any platform.
 
 ### Build and run the examples
@@ -96,6 +98,7 @@ Then run the produced executables:
 
   ```sh
   ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer, coro)
+  ./build/nx_middleware_examples  # Middleware modules (modbus_rtu_slave)
   ./build/nx_algo_examples        # Algorithm modules (crc, sha256)
   ./build/nx_device_examples      # Device drivers (ws2812)
   ```
@@ -104,6 +107,7 @@ Then run the produced executables:
 
   ```sh
   ./build/nx_core_examples.exe
+  ./build/nx_middleware_examples.exe
   ./build/nx_algo_examples.exe
   ./build/nx_device_examples.exe
   ```
@@ -113,6 +117,7 @@ Then run the produced executables:
 
   ```sh
   ./build/Debug/nx_core_examples.exe
+  ./build/Debug/nx_middleware_examples.exe
   ./build/Debug/nx_algo_examples.exe
   ./build/Debug/nx_device_examples.exe
   ```

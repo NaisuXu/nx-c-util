@@ -110,3 +110,76 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 > read them as native `uint16_t`.
 
 
+### nx_modbus_rtu_slave — event-driven RTU slave: frame → subscription dispatch
+
+The link/dispatch layer on top of `nx_modbus_rtu` (frame structs + CRC). It pulls
+bytes from the wire, slices and validates complete RTU frames, and routes each
+request to whatever business module subscribed to it — carrying no business logic
+of its own. It touches no hardware: all I/O is injected as non-blocking callbacks,
+and it is driven from the main loop by a single `process()` call.
+
+- **Subscription dispatch** — each business module claims a `(function code +
+  inclusive address range)` in the subscription table; a matching request is fanned
+  out zero-copy (as a reference-counted `nx_ref_msg`) to that module's queue. One
+  function code can be split across modules by range, and one request can reach
+  several subscribers at once.
+- **Structural validation, in exception order** — before dispatch the slave settles
+  what the frame alone determines: function support (`0x01`), then quantity /
+  byte_count / single-write value legality (`0x03`), then address containment
+  (`0x02`). A dispatched request is therefore already well-formed; whether a value
+  is *operationally* acceptable for a given register stays with the business module,
+  which may push its own exception response.
+- **Length-based framing** — every supported frame's length follows from its
+  function code (8 bytes for `01..06`, `9 + byte_count` for `0F/10`), so RX needs no
+  inter-character (T3.5) timer — robust on a busy bus where arrival timing cannot be
+  trusted. Resync after a bad address or CRC drops one byte and retries. On TX a
+  3.5-character gap (derived from `baud_rate`) follows each frame.
+- **Injected non-blocking I/O** — `read` / `write` move bytes, `is_busy` reports
+  whether the interface is still transmitting (so a shared, non-exclusive bus is
+  driven only when free), optional `dir_tx` toggles the RS-485 direction (DE) pin,
+  and `get_us` times the TX gap. A NULL `is_busy` treats `write` as blocking; a NULL
+  `get_us` skips the gap. `io_ctx` is handed to each callback and may stay NULL when
+  the driver is a single module-owned instance.
+- **Allocates nothing itself** — the RX framing buffer, the tiered pool behind every
+  message, and the shared response queue are all caller-owned. Out of memory degrades
+  gracefully: the response is dropped and the master simply times out.
+
+```c
+#include "nx_modbus_rtu_slave.h"
+
+/* one business module owns holding registers 0x0000..0x000F */
+const nx_modbus_rtu_slave_sub_t subs[] = {
+    { NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 0x000F, &valve_q },
+    { NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0000, 0x000F, &valve_q },
+};
+
+nx_modbus_rtu_slave_t     slave;
+nx_modbus_rtu_slave_cfg_t cfg = {
+    .slave_addr     = 0x11u,
+    .baud_rate      = 115200u,         /* derives the 3.5-char TX gap */
+    .pool           = &pool,           /* tiered pool for messages */
+    .rx_buf         = rx_buf,
+    .rx_size        = sizeof(rx_buf),
+    .subs           = subs,
+    .subs_count     = 2u,
+    .response_queue = &response_queue, /* business replies + exceptions go here */
+    .read           = uart_read,       /* injected non-blocking I/O */
+    .write          = uart_write,
+    .get_us         = board_micros,    /* is_busy NULL => write is blocking */
+};
+nx_modbus_rtu_slave_init(&slave, &cfg);
+
+for (;;) {
+    nx_modbus_rtu_slave_process(&slave);            /* RX dispatch + TX pump */
+    valve_business(&valve_q, &response_queue, &pool);  /* drain inbox, push replies */
+}
+```
+
+> **Note:** the slave validates *structure* (function `0x01`, value `0x03`, address
+> `0x02`), not *meaning*. A business module still range-checks the actual values it
+> is asked to write and may emit its own `0x03` exception onto the response queue.
+> Broadcasts (address 0) are dispatched but never answered — no response, no
+> exception.
+
+
+

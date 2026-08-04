@@ -93,3 +93,64 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 > packing pragma 的原因。多字节字段仍需用 `get_u16` / `set_u16` 处理大端线序 —— 不要
 > 把它们当作原生 `uint16_t` 读取。
 
+
+### nx_modbus_rtu_slave —— 事件驱动的 RTU 从站：帧 → 订阅分发
+
+架设在 `nx_modbus_rtu`（帧结构 + CRC）之上的链路/分发层。它从线上拉取字节，切分并校验
+完整的 RTU 帧，再把每个请求路由给订阅了它的业务模块 —— 自身不含任何业务逻辑。它不接触
+硬件：所有 I/O 都以非阻塞回调的形式注入，并由主循环里单次 `process()` 调用驱动。
+
+- **订阅分发** —— 每个业务模块在订阅表里声明一段 `(功能码 + 闭区间地址范围)`；匹配的
+  请求会零拷贝地（以引用计数的 `nx_ref_msg`）扇出到该模块的队列。同一功能码可按范围拆
+  给多个模块，同一请求也可同时送达多个订阅者。
+- **按异常优先级做结构校验** —— 分发之前，从站先结算仅凭帧本身即可判定的部分：功能是否
+  受支持（`0x01`）、数量 / byte_count / 单写值的合法性（`0x03`）、地址是否落在范围内
+  （`0x02`）。因此被分发的请求必然是结构良好的；而某个值对具体寄存器是否**在业务上**可
+  接受，仍归业务模块判断，它可以推送自己的异常响应。
+- **基于长度的成帧** —— 每个受支持帧的长度都由功能码决定（`01..06` 为 8 字节，`0F/10`
+  为 `9 + byte_count`），因此接收侧无需字符间（T3.5）定时器 —— 在到达时序不可信的繁忙
+  总线上更稳健。地址或 CRC 出错后，丢弃一个字节重新同步。发送侧在每帧之后插入一段 3.5
+  字符的间隔（由 `baud_rate` 推导）。
+- **注入式非阻塞 I/O** —— `read` / `write` 搬运字节，`is_busy` 报告接口是否仍在发送
+  （使共享、非独占的总线只在空闲时才被驱动），可选的 `dir_tx` 翻转 RS-485 方向（DE）
+  引脚，`get_us` 为发送间隔计时。`is_busy` 为 NULL 时把 `write` 视作阻塞完成；`get_us`
+  为 NULL 时跳过间隔。`io_ctx` 会传给每个回调，当驱动是模块自有的单一实例时可保持 NULL。
+- **自身不做任何分配** —— 接收成帧缓冲、每条消息背后的分层内存池、共享的响应队列全部由
+  调用方持有。内存耗尽时优雅降级：响应被丢弃，主站超时即可。
+
+```c
+#include "nx_modbus_rtu_slave.h"
+
+/* one business module owns holding registers 0x0000..0x000F */
+const nx_modbus_rtu_slave_sub_t subs[] = {
+    { NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 0x000F, &valve_q },
+    { NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0000, 0x000F, &valve_q },
+};
+
+nx_modbus_rtu_slave_t     slave;
+nx_modbus_rtu_slave_cfg_t cfg = {
+    .slave_addr     = 0x11u,
+    .baud_rate      = 115200u,         /* derives the 3.5-char TX gap */
+    .pool           = &pool,           /* tiered pool for messages */
+    .rx_buf         = rx_buf,
+    .rx_size        = sizeof(rx_buf),
+    .subs           = subs,
+    .subs_count     = 2u,
+    .response_queue = &response_queue, /* business replies + exceptions go here */
+    .read           = uart_read,       /* injected non-blocking I/O */
+    .write          = uart_write,
+    .get_us         = board_micros,    /* is_busy NULL => write is blocking */
+};
+nx_modbus_rtu_slave_init(&slave, &cfg);
+
+for (;;) {
+    nx_modbus_rtu_slave_process(&slave);            /* RX dispatch + TX pump */
+    valve_business(&valve_q, &response_queue, &pool);  /* drain inbox, push replies */
+}
+```
+
+> **注意：** 从站校验的是**结构**（功能 `0x01`、值 `0x03`、地址 `0x02`），不是**语义**。
+> 业务模块仍需对被要求写入的实际值做范围检查，并可把自己的 `0x03` 异常推入响应队列。
+> 广播（地址 0）会被分发但从不应答 —— 不回响应，也不回异常。
+
+
