@@ -147,15 +147,25 @@ size_t nx_log_process(nx_log_t *log)
         return 0u;   /* no sink: pull with nx_log_read instead */
     }
 
+    /* Copy each chunk out of the ring under the lock, then hand it to the
+     * (possibly slow, possibly blocking) sink OUTSIDE the lock. Copying under
+     * the lock makes the consume atomic against a producer - even one in an ISR,
+     * even one evicting the oldest line under NX_LOG_ON_FULL_OVERWRITE_OLD (which
+     * moves read_pos on the producer side) - so the sink never streams bytes that
+     * are being overwritten, and a producer never waits on I/O. */
     for (;;) {
-        size_t         seg_len = 0u;
-        const uint8_t *seg     = nx_ringbuf_peek_linear(&log->rb, &seg_len);
-        if (seg == NULL || seg_len == 0u) {
+        uint8_t   chunk[NX_LOG_LINE_MAX];
+        size_t    n;
+        uintptr_t saved = nx_lock_enter(log->cfg.lock);
+
+        n = nx_ringbuf_read(&log->rb, chunk, sizeof(chunk));
+        nx_lock_exit(log->cfg.lock, saved);
+
+        if (n == 0u) {
             break;
         }
-        log->cfg.write(log->cfg.io_ctx, seg, seg_len);
-        (void)nx_ringbuf_discard(&log->rb, seg_len);
-        total += seg_len;
+        log->cfg.write(log->cfg.io_ctx, chunk, n);
+        total += n;
     }
     return total;
 }

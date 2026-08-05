@@ -157,6 +157,11 @@ bool nx_log_write(nx_log_t *log, nx_log_level_t level,
  * A no-op returning 0 when no sink is configured (cfg.write == NULL); use
  * nx_log_read to pull the bytes out instead.
  *
+ * Each chunk is copied out of the ring under the configured lock, then handed to
+ * the sink outside it: the consume stays atomic against a producer (including one
+ * in an ISR) while the slow, possibly blocking sink never runs inside the lock,
+ * so a producer never waits on I/O.
+ *
  * @param  log Logger handle.
  *
  * @return The number of bytes handed to the sink this call.
