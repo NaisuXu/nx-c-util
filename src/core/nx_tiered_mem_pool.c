@@ -181,6 +181,7 @@ nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
      * only the table slots are sorted, and each tier keeps its own base/used. */
     pool->tier_count      = 0u;
     pool->forbid_fallback = cfg->forbid_fallback;
+    pool->lock            = cfg->lock;
     for (size_t i = 0u; i < cfg->tier_count; i++) {
         size_t seg_bytes;
         (void)nx_tiered_tier_bytes(&cfg->tiers[i], &seg_bytes);   /* validated in pass 1 */
@@ -211,8 +212,13 @@ void *nx_tiered_mem_pool_alloc(nx_tiered_mem_pool_t *pool, size_t size)
     /* Tiers are sorted ascending: the first large-enough tier with a free block
      * is the best fit, which naturally falls back to larger tiers. With
      * forbid_fallback, the search stops once block_size exceeds the ideal tier's
-     * (equal-size tiers are equivalent, not "larger", so they stay usable). */
-    size_t ideal_block_size = 0u;
+     * (equal-size tiers are equivalent, not "larger", so they stay usable).
+     *
+     * The search-and-claim (bitmap scan + bit_set + free_count-- + watermark) is
+     * one critical section: wrap it in the configured lock (NULL = no-op). */
+    void     *result          = NULL;
+    size_t    ideal_block_size = 0u;
+    uintptr_t saved           = nx_lock_enter(pool->lock);
 
     for (size_t i = 0u; i < pool->tier_count; i++) {
         nx_tiered_level_t *t = &pool->tiers[i];
@@ -248,10 +254,12 @@ void *nx_tiered_mem_pool_alloc(nx_tiered_mem_pool_t *pool, size_t size)
         if (t->free_count < t->min_free_count) {
             t->min_free_count = t->free_count;
         }
-        return t->base + idx * t->block_size;
+        result = t->base + idx * t->block_size;
+        break;
     }
 
-    return NULL;
+    nx_lock_exit(pool->lock, saved);
+    return result;
 }
 
 nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr)
@@ -265,7 +273,13 @@ nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr)
 
     uint8_t *p = (uint8_t *)ptr;
 
-    /* Locate the owning tier purely by address range (zero per-block overhead). */
+    /* Locate the owning tier, validate the boundary, reject double frees, then
+     * clear the bit and bump free_count - one critical section under the
+     * configured lock (NULL = no-op). This keeps the double-free check and the
+     * bit clear one atomic read-modify-write against a concurrent free. */
+    nx_tiered_ret_t result = NX_TIERED_ERR_INVALID;   /* not owned by this pool */
+    uintptr_t       saved  = nx_lock_enter(pool->lock);
+
     for (size_t i = 0u; i < pool->tier_count; i++) {
         nx_tiered_level_t *t = &pool->tiers[i];
         if (p < t->base || p >= t->end) {
@@ -275,21 +289,25 @@ nx_tiered_ret_t nx_tiered_mem_pool_free(nx_tiered_mem_pool_t *pool, void *ptr)
         /* Must land exactly on a block boundary, otherwise the pointer is invalid. */
         size_t offset = (size_t)(p - t->base);
         if ((offset % t->block_size) != 0u) {
-            return NX_TIERED_ERR_INVALID;
+            result = NX_TIERED_ERR_INVALID;
+            break;
         }
         size_t idx = offset / t->block_size;
 
         /* A clear bit means the block is already free: reject the double free. */
         if (!nx_tiered_bit_used(t, idx)) {
-            return NX_TIERED_ERR_DOUBLE_FREE;
+            result = NX_TIERED_ERR_DOUBLE_FREE;
+            break;
         }
 
         nx_tiered_bit_clear(t, idx);
         t->free_count++;
-        return NX_TIERED_OK;
+        result = NX_TIERED_OK;
+        break;
     }
 
-    return NX_TIERED_ERR_INVALID;   /* not owned by this pool */
+    nx_lock_exit(pool->lock, saved);
+    return result;
 }
 
 size_t nx_tiered_mem_pool_tier_count(const nx_tiered_mem_pool_t *pool)

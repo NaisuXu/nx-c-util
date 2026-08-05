@@ -20,7 +20,9 @@
  *     allowed.
  *   - Built-in double-free detection via the bitmap, at no extra cost.
  *   - Exhaustion fallback to a larger tier (optional).
- *   - Not thread-safe: concurrent access must be locked by the caller.
+ *   - Optional locking: a single-context user needs no lock; when alloc/free run
+ *     from several contexts the caller supplies an nx_lock that wraps each of them.
+ *     This module introduces no locks of its own.
  */
 #ifndef NX_TIERED_MEM_POOL_H
 #define NX_TIERED_MEM_POOL_H
@@ -28,6 +30,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "nx_lock.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -73,6 +77,7 @@ typedef struct {
     nx_tiered_level_t *tiers;   /**< Tier table (carved from the arena), sorted by ascending block_size */
     size_t         tier_count;  /**< Number of active tiers */
     bool           forbid_fallback;  /**< When true, forbid falling back to a larger tier on exhaustion (set at init) */
+    const nx_lock_t *lock;      /**< Critical section around alloc/free; NULL = none (set at init) */
 } nx_tiered_mem_pool_t;
 
 /**
@@ -113,6 +118,7 @@ typedef struct {
     const nx_tiered_level_cfg_t *tiers; /**< Caller-owned tier list of @c tier_count entries (read only during init) */
     size_t                tier_count;   /**< Number of tiers; must be > 0 */
     bool                  forbid_fallback;  /**< Fallback policy on exhaustion; false (default) allows falling back to a larger tier */
+    const nx_lock_t      *lock;         /**< Critical section around alloc/free; NULL (default) = no locking (single-context use) */
 } nx_tiered_mem_pool_cfg_t;
 
 /**
@@ -167,6 +173,9 @@ nx_tiered_ret_t nx_tiered_mem_pool_init(nx_tiered_mem_pool_t           *pool,
  * in which case it returns NULL rather than borrow from a larger tier). The
  * returned block is max_align_t aligned; contents are uninitialized (like malloc).
  *
+ * The whole operation is wrapped in the configured lock (cfg.lock); NULL means no
+ * locking, for single-context use.
+ *
  * @param  pool Pool handle.
  * @param  size Requested byte count; returns NULL when 0.
  *
@@ -181,6 +190,9 @@ void *nx_tiered_mem_pool_alloc(nx_tiered_mem_pool_t *pool, size_t size);
  * Passing NULL is a no-op (returns NX_TIERED_OK), consistent with free().
  * Freeing a block that is already free is rejected (NX_TIERED_ERR_DOUBLE_FREE)
  * via the in-use bitmap, always on and O(1).
+ *
+ * The whole operation is wrapped in the configured lock (cfg.lock); NULL means no
+ * locking, for single-context use.
  *
  * @param  pool Pool handle.
  * @param  ptr  Block to return, or NULL.

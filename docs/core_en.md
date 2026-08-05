@@ -154,7 +154,9 @@ several "tiers" of equally sized blocks carved out of one caller-provided buffer
   to fit. The buffer needs no particular alignment.
 - **Built-in statistics** — per tier: block size, count, free count, and peak usage
   (high-water mark), read by index.
-- **Not thread-safe** — concurrent access must be locked by the caller.
+- **Optional locking** — a single-context user needs no lock; when alloc/free run
+  from several contexts, supply an `nx_lock` in the config and the pool wraps each of
+  them. `NULL` (the default) compiles to nothing. The module adds no locks of its own.
 
 ```c
 #include "nx_tiered_mem_pool.h"
