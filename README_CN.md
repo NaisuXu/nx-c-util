@@ -62,7 +62,7 @@ nx-c-util/
 详细说明和示例请参阅[算法模块文档](docs/algo_cn.md)。
 
 ### 设备模块
-- nx_ws2812 — WS2812/WS2812B RGB LED 灯带驱动
+- [nx_ws2812](docs/device_cn.md#nx_ws2812--ws2812b-rgb-灯带驱动) — WS2812/WS2812B RGB LED 灯带驱动
 
 详细说明和示例请参阅[设备模块文档](docs/device_cn.md)。
 

@@ -73,10 +73,10 @@ static bool mock_write(void *ctx, const uint8_t *src, size_t len)
     return true;   /* blocking write: complete on return, so is_busy is NULL */
 }
 
-/* Mock microsecond clock; the drive loop advances g_io.clock_us between calls. */
-static uint32_t mock_get_us(void *ctx)
+/* Mock microsecond clock; the drive loop advances g_io.clock_us between calls.
+ * A single system-wide time source takes no context. */
+static uint32_t mock_get_us(void)
 {
-    (void)ctx;
     return g_io.clock_us;
 }
 
@@ -230,6 +230,7 @@ int nx_modbus_rtu_slave_example_run(void)
         .dir_tx         = NULL,     /* no DE pin in this mock */
         .get_us         = mock_get_us,
         .io_ctx         = NULL,     /* single module-owned endpoint; see g_io */
+        .dir_ctx        = NULL,     /* no DE pin in this mock */
     };
     if (!nx_modbus_rtu_slave_init(&slave, &cfg)) {
         printf("slave init failed\n");

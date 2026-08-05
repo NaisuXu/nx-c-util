@@ -138,8 +138,10 @@ and it is driven from the main loop by a single `process()` call.
   whether the interface is still transmitting (so a shared, non-exclusive bus is
   driven only when free), optional `dir_tx` toggles the RS-485 direction (DE) pin,
   and `get_us` times the TX gap. A NULL `is_busy` treats `write` as blocking; a NULL
-  `get_us` skips the gap. `io_ctx` is handed to each callback and may stay NULL when
-  the driver is a single module-owned instance.
+  `get_us` skips the gap. The serial callbacks (`read` / `write` / `is_busy`) share
+  `io_ctx`, which may stay NULL when the driver is a single module-owned instance;
+  `dir_tx` takes its own `dir_ctx` (the DE pin is often a separate GPIO), and `get_us`
+  takes no context as a system-wide time source.
 - **Allocates nothing itself** — the RX framing buffer, the tiered pool behind every
   message, and the shared response queue are all caller-owned. Out of memory degrades
   gracefully: the response is dropped and the master simply times out.

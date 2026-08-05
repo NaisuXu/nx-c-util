@@ -29,7 +29,7 @@ bool nx_ws2812_init(nx_ws2812_t           *ws2812,
     if (ws2812 == NULL || cfg == NULL || pixel_buffer == NULL || tx_buffer == NULL) {
         return false;
     }
-    if (cfg->led_count == 0U || cfg->write_fn == NULL) {
+    if (cfg->led_count == 0U || cfg->write == NULL) {
         return false;
     }
 
@@ -182,10 +182,10 @@ uint8_t nx_ws2812_get_brightness(const nx_ws2812_t *ws2812)
 
 bool nx_ws2812_busy(const nx_ws2812_t *ws2812)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->cfg->busy_fn == NULL) {
+    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->cfg->is_busy == NULL) {
         return false;   /* no way to tell, so report idle */
     }
-    return ws2812->cfg->busy_fn(ws2812->cfg->busy_arg);
+    return ws2812->cfg->is_busy(ws2812->cfg->io_ctx);
 }
 
 bool nx_ws2812_update(nx_ws2812_t *ws2812)
@@ -224,7 +224,7 @@ bool nx_ws2812_update(nx_ws2812_t *ws2812)
         out += cfg->reset_bytes;
     }
 
-    return cfg->write_fn(ws2812->tx, (size_t)(out - ws2812->tx), cfg->write_arg);
+    return cfg->write(cfg->io_ctx, ws2812->tx, (size_t)(out - ws2812->tx));
 }
 
 bool nx_ws2812_get_pixel(const nx_ws2812_t *ws2812,

@@ -28,8 +28,10 @@
  * received bytes, a non-blocking @c write starts a transmission, @c is_busy reports
  * whether the interface is still occupied (so a shared, non-exclusive bus is only
  * driven when free), and an optional @c dir_tx drives the RS-485 direction (DE) pin.
- * Timing is supplied by the caller through the @c get_us callback, read on demand to
- * time the TX inter-frame gap.
+ * The serial callbacks (@c read / @c write / @c is_busy) share one @c io_ctx; the DE
+ * pin, often a separate GPIO, gets its own @c dir_ctx. Timing is supplied by the
+ * caller through the @c get_us callback, read on demand to time the TX inter-frame
+ * gap; being a single system-wide time source, it takes no context.
  *
  * Memory: the RX framing buffer is caller-provided (@c rx_buf / @c rx_size); all
  * request/response messages are allocated from a caller-provided tiered pool via
@@ -99,25 +101,27 @@ typedef struct {
                                  the slave transmits whatever is pushed here, and also
                                  pushes its own exception responses here. */
 
-    /* ---- injected, non-blocking I/O (io_ctx is passed to each) ---- */
+    /* ---- injected, non-blocking I/O ---- */
 
     /** Pull up to @p max received bytes into @p dst; return the count copied. */
-    size_t (*read)(void *io_ctx, uint8_t *dst, size_t max);
+    size_t (*read)(void *ctx, uint8_t *dst, size_t max);
     /** Start transmitting @p len bytes from @p src (non-blocking). */
-    bool   (*write)(void *io_ctx, const uint8_t *src, size_t len);
+    bool   (*write)(void *ctx, const uint8_t *src, size_t len);
     /** Return true while the interface is busy transmitting: from the moment a
      *  @c write starts until the frame has fully left the wire. Gates both the end
      *  of a transmission and, for a shared/non-exclusive bus, the start of the next
      *  one (nothing is written while busy). May be NULL, in which case @c write is
      *  treated as blocking and completing immediately. */
-    bool   (*is_busy)(void *io_ctx);
+    bool   (*is_busy)(void *ctx);
     /** Drive the RS-485 direction pin: true = transmit, false = receive. May be NULL. */
-    void   (*dir_tx)(void *io_ctx, bool enable);
+    void   (*dir_tx)(void *ctx, bool enable);
     /** Return a free-running microsecond counter (wrap-around safe). Used only to
-     *  time the TX inter-frame gap; if NULL, no gap is enforced. */
-    uint32_t (*get_us)(void *io_ctx);
+     *  time the TX inter-frame gap; if NULL, no gap is enforced. A single system-wide
+     *  time source, so it takes no context. */
+    uint32_t (*get_us)(void);
 
-    void   *io_ctx;         /**< Opaque context handed to the I/O callbacks */
+    void   *io_ctx;         /**< Context for the serial callbacks (read / write / is_busy) */
+    void   *dir_ctx;        /**< Context for @c dir_tx (the DE pin, often a separate GPIO) */
 } nx_modbus_rtu_slave_cfg_t;
 
 /**

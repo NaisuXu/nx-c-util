@@ -114,7 +114,9 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 - **注入式非阻塞 I/O** —— `read` / `write` 搬运字节，`is_busy` 报告接口是否仍在发送
   （使共享、非独占的总线只在空闲时才被驱动），可选的 `dir_tx` 翻转 RS-485 方向（DE）
   引脚，`get_us` 为发送间隔计时。`is_busy` 为 NULL 时把 `write` 视作阻塞完成；`get_us`
-  为 NULL 时跳过间隔。`io_ctx` 会传给每个回调，当驱动是模块自有的单一实例时可保持 NULL。
+  为 NULL 时跳过间隔。串口回调（`read` / `write` / `is_busy`）共用 `io_ctx`，当驱动是
+  模块自有的单一实例时可保持 NULL；`dir_tx` 用独立的 `dir_ctx`（DE 引脚常是另一个 GPIO），
+  `get_us` 作为系统级时间源不带任何 ctx。
 - **自身不做任何分配** —— 接收成帧缓冲、每条消息背后的分层内存池、共享的响应队列全部由
   调用方持有。内存耗尽时优雅降级：响应被丢弃，主站超时即可。
 

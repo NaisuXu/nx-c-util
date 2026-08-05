@@ -304,7 +304,7 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
         }
         s->run.tx_cur = msg;
         if (s->cfg.dir_tx != NULL) {
-            s->cfg.dir_tx(s->cfg.io_ctx, true);   /* drive the bus */
+            s->cfg.dir_tx(s->cfg.dir_ctx, true);   /* drive the bus */
         }
         (void)s->cfg.write(s->cfg.io_ctx, nx_ref_msg_data(msg), nx_ref_msg_len(msg));
         s->run.tx_state = TX_SENDING;
@@ -315,13 +315,13 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
         /* A NULL is_busy means write() was blocking: treat as already done. */
         if (s->cfg.is_busy == NULL || !s->cfg.is_busy(s->cfg.io_ctx)) {
             if (s->cfg.dir_tx != NULL) {
-                s->cfg.dir_tx(s->cfg.io_ctx, false);  /* release the bus */
+                s->cfg.dir_tx(s->cfg.dir_ctx, false);  /* release the bus */
             }
             nx_ref_msg_release(s->run.tx_cur);
             s->run.tx_cur = NULL;
             /* Enter the inter-frame gap only if we have a clock and a gap to wait. */
             if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
-                s->run.gap_start_us = s->cfg.get_us(s->cfg.io_ctx);
+                s->run.gap_start_us = s->cfg.get_us();
                 s->run.tx_state     = TX_GAP;
             } else {
                 s->run.tx_state = TX_IDLE;
@@ -331,7 +331,7 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
 
     case TX_GAP:
         /* Only reached when get_us != NULL (guarded above), so the call is safe. */
-        if ((uint32_t)(s->cfg.get_us(s->cfg.io_ctx) - s->run.gap_start_us) >= s->run.gap_us) {
+        if ((uint32_t)(s->cfg.get_us() - s->run.gap_start_us) >= s->run.gap_us) {
             s->run.tx_state = TX_IDLE;
         }
         break;

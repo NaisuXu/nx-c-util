@@ -90,15 +90,18 @@ extern "C" {
  *   - SPI, MSB first @ 2.4-3.6 MHz:                    0xC0 / 0xF8
  *   - UART, LSB first @ 2.4-3.2 Mbaud (8N1, inv. TX):  0x03 / 0x1F
  *
- * write_fn: pushes the encoded stream to the peripheral. Must block until the
+ * write: pushes the encoded stream to the peripheral. Must block until the
  * write is accepted, though transmission itself may continue in the background
  * (DMA). Returns true on success, false on peripheral error.
  *
- * busy_fn: optional; returns true while the previous write is still transmitting.
+ * is_busy: optional; returns true while the previous write is still transmitting.
  * nx_ws2812_update checks it once and returns NX_WS2812_BUSY rather than waiting,
  * and nx_ws2812_busy exposes it so callers can poll on their own terms. NULL means
- * writes are assumed complete when write_fn returns, so the strip never reports
+ * writes are assumed complete when write returns, so the strip never reports
  * busy - correct for blocking transfers, wrong for DMA.
+ *
+ * io_ctx: opaque context passed as the first argument to both write and is_busy,
+ * which drive the same serial peripheral.
  *
  * reset_bytes: zero bytes appended after the data to hold the line low and latch
  * the frame. WS2812 needs >50us, WS2812B >280us on some revisions - check your
@@ -111,10 +114,9 @@ typedef struct {
     size_t  reset_bytes;   /**< Trailing zero bytes that latch the frame */
     uint8_t bit0_pattern;  /**< Byte encoding a "0" bit */
     uint8_t bit1_pattern;  /**< Byte encoding a "1" bit */
-    bool (*write_fn)(const uint8_t *data, size_t len, void *arg);  /**< Required */
-    bool (*busy_fn)(void *arg);                                    /**< Optional; may be NULL */
-    void *write_arg;       /**< User context passed to write_fn */
-    void *busy_arg;        /**< User context passed to busy_fn */
+    bool (*write)(void *ctx, const uint8_t *data, size_t len);  /**< Required */
+    bool (*is_busy)(void *ctx);                                 /**< Optional; may be NULL */
+    void *io_ctx;          /**< Context passed to write / is_busy (same peripheral) */
 } nx_ws2812_cfg_t;
 
 /**
@@ -147,7 +149,7 @@ typedef struct {
  * Brightness starts at 255 (unscaled) and the pixel buffer is cleared to black.
  *
  * @return true on success, false on invalid arguments (NULL pointers,
- *         led_count == 0, or a NULL write_fn).
+ *         led_count == 0, or a NULL write callback).
  */
 bool nx_ws2812_init(nx_ws2812_t           *ws2812,
                     const nx_ws2812_cfg_t *cfg,

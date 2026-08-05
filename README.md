@@ -66,7 +66,7 @@ See [Middleware Modules Documentation](docs/middleware_en.md) for detailed descr
 See [Algorithm Modules Documentation](docs/algo_en.md) for detailed descriptions and examples.
 
 ### Device Modules
-- nx_ws2812 — WS2812/WS2812B RGB LED strip driver
+- [nx_ws2812](docs/device_en.md#nx_ws2812--ws2812b-rgb-led-strip-driver) — WS2812/WS2812B RGB LED strip driver
 
 See [Device Modules Documentation](docs/device_en.md) for detailed descriptions and examples.
 

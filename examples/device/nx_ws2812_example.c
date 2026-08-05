@@ -44,9 +44,9 @@ typedef struct {
     bool    fail_next;        /* make the next write report an error */
 } fake_spi_t;
 
-static bool fake_spi_write(const uint8_t *data, size_t len, void *arg)
+static bool fake_spi_write(void *ctx, const uint8_t *data, size_t len)
 {
-    fake_spi_t *spi = (fake_spi_t *)arg;
+    fake_spi_t *spi = (fake_spi_t *)ctx;
 
     if (spi->fail_next) {
         spi->fail_next = false;
@@ -62,9 +62,9 @@ static bool fake_spi_write(const uint8_t *data, size_t len, void *arg)
     return true;
 }
 
-static bool fake_spi_busy(void *arg)
+static bool fake_spi_busy(void *ctx)
 {
-    fake_spi_t *spi = (fake_spi_t *)arg;
+    fake_spi_t *spi = (fake_spi_t *)ctx;
 
     if (spi->busy_countdown > 0) {
         spi->busy_countdown--;
@@ -338,12 +338,12 @@ static void example_busy(nx_ws2812_t *strip)
     assert(ok);
 
     /* Pretend the transfer takes 3 more polls to drain. update must refuse
-     * rather than spin, and must not have called write_fn. */
+     * rather than spin, and must not have called write. */
     g_spi.busy_countdown = 3;
     size_t before = g_spi.write_count;
 
     ok = nx_ws2812_update(strip);
-    printf("  busy    -> update returned %s, write_fn calls %zu -> %zu\n",
+    printf("  busy    -> update returned %s, write calls %zu -> %zu\n",
            ok ? "true" : "false", before, g_spi.write_count);
     assert(!ok);
     assert(g_spi.write_count == before);   /* nothing was sent */
@@ -356,7 +356,7 @@ static void example_busy(nx_ws2812_t *strip)
     printf("  drained after %zu polls of nx_ws2812_busy\n", polls);
 
     ok = nx_ws2812_update(strip);
-    printf("  retry   -> update returned %s, write_fn calls now %zu\n",
+    printf("  retry   -> update returned %s, write calls now %zu\n",
            ok ? "true" : "false", g_spi.write_count);
     assert(ok);
     assert(g_spi.write_count == before + 1U);
@@ -389,10 +389,9 @@ int nx_ws2812_example_run(void)
         .reset_bytes  = RESET_BYTES,
         .bit0_pattern = BIT0_PATTERN,
         .bit1_pattern = BIT1_PATTERN,
-        .write_fn     = fake_spi_write,
-        .busy_fn      = fake_spi_busy,
-        .write_arg    = &g_spi,
-        .busy_arg     = &g_spi,
+        .write        = fake_spi_write,
+        .is_busy      = fake_spi_busy,
+        .io_ctx       = &g_spi,
     };
 
     nx_ws2812_t strip;
