@@ -42,17 +42,22 @@ nx_ref_msg_ret_t nx_ref_msg_publish(nx_ref_msg_t *msg, nx_queue_t *q)
         return NX_REF_MSG_ERR_PARAM;
     }
 
-    /* The enqueued element is the "message pointer". */
-    nx_queue_ret_t r = nx_queue_push(q, &msg);
-    if (r == NX_QUEUE_ERR_FULL) {
-        return NX_REF_MSG_ERR_FULL;
-    }
+    /* Take the reference BEFORE the pointer becomes reachable: increment first,
+     * then enqueue, handing the reference back if the enqueue fails. The count
+     * then covers the queued pointer for as long as it is reachable, so a consumer
+     * that pops and releases can never drop it to 0 while this publish is still in
+     * flight (which would free the block underneath it). The net effect is +1 on
+     * success and unchanged on failure; over-counting for the brief pre-failure
+     * window only ever delays a free, never causes an early one. */
+    msg->refcount++;
+
+    nx_queue_ret_t r = nx_queue_push(q, &msg);   /* enqueue the message pointer */
     if (r != NX_QUEUE_OK) {
-        return NX_REF_MSG_ERR_PARAM;
+        msg->refcount--;   /* not enqueued: give the reference back */
+        return (r == NX_QUEUE_ERR_FULL) ? NX_REF_MSG_ERR_FULL
+                                        : NX_REF_MSG_ERR_PARAM;
     }
 
-    /* Increment the reference count only after a successful enqueue. */
-    msg->refcount++;
     return NX_REF_MSG_OK;
 }
 

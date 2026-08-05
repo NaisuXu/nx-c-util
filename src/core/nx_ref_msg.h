@@ -140,8 +140,10 @@ static inline nx_ref_msg_ret_t nx_ref_msg_shrink(nx_ref_msg_t *msg, size_t new_l
 /**
  * @brief  Publish the message to a single queue (enqueues one nx_ref_msg_t* pointer).
  *
- * The reference count is incremented only on a successful enqueue; if the queue is
- * full it returns NX_REF_MSG_ERR_FULL and leaves the count unchanged.
+ * The reference is taken before the pointer is enqueued and handed back if the
+ * enqueue fails, so a consumer that pops the pointer can never drive the count to 0
+ * while the publish is still in flight. The net effect is unchanged: +1 on success,
+ * and the count is left untouched when the queue is full (NX_REF_MSG_ERR_FULL).
  *
  * @param  msg Message handle.
  * @param  q   Target queue (should be initialized by nx_ref_msg_queue_init).
