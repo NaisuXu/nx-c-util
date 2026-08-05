@@ -10,9 +10,13 @@
  *   - Purely static buffer: storage is provided entirely by the caller; this library uses
  *     no dynamic memory and does not depend on malloc/free - suitable for heap-less targets
  *     or scenarios requiring a deterministic memory layout.
- *   - In a single-producer/single-consumer scenario, where one side only pushes and the
- *     other only pops, it is naturally thread-safe; other concurrent scenarios require the
- *     caller to add its own locking (this library introduces no locks).
+ *   - Single-producer/single-consumer friendly: with one side only pushing and the
+ *     other only popping, it is safe without a lock on a single core as long as the
+ *     two sides do not preempt each other - because push and pop both read-modify-write
+ *     the shared element count, an interrupt-context producer that preempts a consumer
+ *     (or vice versa) can lose an update. When the two sides can preempt each other, or
+ *     for any other concurrent access, wrap push/pop in an nx_lock (this library
+ *     introduces no locks of its own).
  */
 #ifndef NX_QUEUE_H
 #define NX_QUEUE_H

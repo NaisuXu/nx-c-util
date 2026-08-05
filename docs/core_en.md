@@ -60,9 +60,11 @@ A fixed-capacity FIFO queue backed by a caller-provided buffer.
 - **Full-queue policy** — choose per queue how a push behaves when full:
   `NX_QUEUE_ON_FULL_REJECT` (reject the new element) or
   `NX_QUEUE_ON_FULL_OVERWRITE` (drop the oldest element and keep the newest).
-- **SPSC-friendly** — in a single-producer/single-consumer scenario (one side
-  only pushes, the other only pops) it is naturally thread-safe; other
-  concurrent access requires caller-side locking.
+- **SPSC-friendly** — with one side only pushing and the other only popping, it is
+  safe without a lock on a single core as long as the two sides do not preempt each
+  other; because push and pop both read-modify-write the shared element count, a
+  producer that preempts a consumer (or vice versa) can lose an update. When they can
+  preempt each other, or for any other concurrent access, wrap push/pop in an `nx_lock`.
 - **Helpers** — `push` / `pop` / `peek` / `clear` / `size` / `capacity` /
   `is_empty` / `is_full`.
 
@@ -103,9 +105,12 @@ the natural fit for serial I/O (UART RX/TX) and other streaming data.
   so a DMA engine can read from or write to the ring buffer directly; commit a
   direct fill with `nx_ringbuf_commit`, consume a direct read with
   `nx_ringbuf_discard`. No bounce buffer needed.
-- **SPSC-friendly** — with one writer and one reader it is naturally thread-safe
-  on a single core; other concurrent access requires caller-side locking (see
-  `nx_lock`). This module introduces no locks.
+- **SPSC-friendly** — with one writer and one reader it is safe without a lock on a
+  single core as long as the two sides do not preempt each other; because write and
+  discard both read-modify-write the shared byte count, a producer that preempts a
+  consumer (or vice versa) can lose an update. When they can preempt each other, or for
+  any other concurrent access, wrap the operations in an `nx_lock` (see `nx_lock`). This
+  module introduces no locks.
 - **Helpers** — `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`.
 
 ```c

@@ -19,10 +19,13 @@
  *   - DMA-friendly: the "linear" helpers expose the largest physically
  *     contiguous readable / writable region, so a DMA engine can work against
  *     the ring buffer directly without a bounce buffer.
- *   - In a single-producer/single-consumer scenario (one side only writes, the
- *     other only reads) it is naturally thread-safe on a single core; other
- *     concurrent scenarios require the caller to add its own locking. This module
- *     introduces no locks.
+ *   - Single-producer/single-consumer friendly: with one side only writing and the
+ *     other only reading, it is safe without a lock on a single core as long as the
+ *     two sides do not preempt each other - because write and discard both
+ *     read-modify-write the shared byte count, an interrupt-context producer that
+ *     preempts a consumer (or vice versa) can lose an update. When the two sides can
+ *     preempt each other, or for any other concurrent access, wrap the operations in
+ *     an nx_lock. This module introduces no locks of its own.
  */
 #ifndef NX_RINGBUF_H
 #define NX_RINGBUF_H

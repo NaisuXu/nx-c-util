@@ -54,8 +54,9 @@ nx_list_del(&t1.link);   /* remove from anywhere */
 - **满队列策略** —— 每个队列可单独选择满时 push 的行为：
   `NX_QUEUE_ON_FULL_REJECT`（拒绝新元素）或 `NX_QUEUE_ON_FULL_OVERWRITE`
   （丢弃最旧元素，保留最新的）。
-- **适合 SPSC** —— 在单生产者/单消费者场景下（一方只 push，另一方只 pop）天然线程
-  安全；其他并发访问需要调用者自行加锁。
+- **适合 SPSC** —— 一方只 push、另一方只 pop 时，只要两侧不互相抢占，在单核上无需加锁
+  即安全；由于 push 和 pop 都会读-改-写共享的元素计数，若生产者抢占消费者（或反之）可能丢失
+  一次更新。两侧可能互相抢占、或任何其他并发访问时，用 `nx_lock` 包住 push/pop。
 - **辅助函数** —— `push` / `pop` / `peek` / `clear` / `size` / `capacity` /
   `is_empty` / `is_full`。
 
@@ -91,8 +92,10 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 - **DMA 友好** —— `peek_linear` 暴露最大的物理连续*可读*区域，`poke_linear` 暴露
   最大的连续*可写*区域，因此 DMA 引擎可以直接从环形缓冲读或往里写；直接填充后用
   `nx_ringbuf_commit` 提交，直接读取后用 `nx_ringbuf_discard` 消费。无需中转缓冲。
-- **适合 SPSC** —— 在单核上一个写者、一个读者时天然线程安全；其他并发访问需要调用者
-  自行加锁（参见 `nx_lock`）。本模块不引入任何锁。
+- **适合 SPSC** —— 一个写者、一个读者时，只要两侧不互相抢占，在单核上无需加锁即安全；
+  由于 write 和 discard 都会读-改-写共享的字节计数，若生产者抢占消费者（或反之）可能丢失
+  一次更新。两侧可能互相抢占、或任何其他并发访问时，用 `nx_lock` 包住这些操作（参见
+  `nx_lock`）。本模块不引入任何锁。
 - **辅助函数** —— `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`。
 
 ```c
