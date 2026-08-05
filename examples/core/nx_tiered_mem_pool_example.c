@@ -36,13 +36,13 @@ static _Alignas(max_align_t) uint8_t g_pool_mem[2048];
 /* Print a one-line summary of every tier's current usage. */
 static void dump_stats(const nx_tiered_mem_pool_t *pool)
 {
-    nx_tiered_pool_stat_t stat;
-    nx_tiered_mem_pool_get_stat(pool, &stat);
-    for (size_t i = 0; i < stat.tier_count; i++) {
-        const nx_tiered_level_stat_t *st = &stat.tiers[i];
+    size_t n = nx_tiered_mem_pool_tier_count(pool);
+    for (size_t i = 0; i < n; i++) {
+        nx_tiered_level_stat_t st;
+        nx_tiered_mem_pool_get_tier_stat(pool, i, &st);
         printf("    tier %zu: block=%3zu B  used=%zu/%zu  peak=%zu\n",
-               i, st->block_size,
-               st->block_count - st->free_count, st->block_count, st->peak_used);
+               i, st.block_size,
+               st.block_count - st.free_count, st.block_count, st.peak_used);
     }
 }
 
@@ -54,16 +54,17 @@ int nx_tiered_mem_pool_example_run(void)
     printf("########## nx_tiered_mem_pool examples ##########\n");
     printf("pool buffer = %zu bytes\n\n", sizeof(g_pool_mem));
 
-    /* The whole configuration lives in one struct; the tier list is embedded. */
+    /* The tier list is a caller-owned array; the config just points at it. */
+    static const nx_tiered_level_cfg_t tiers[] = {
+        { TIER_S_SIZE, TIER_S_COUNT },
+        { TIER_M_SIZE, TIER_M_COUNT },
+        { TIER_L_SIZE, TIER_L_COUNT },
+    };
     nx_tiered_mem_pool_cfg_t cfg = {
         .memory      = g_pool_mem,
         .memory_size = sizeof(g_pool_mem),
-        .tiers       = {
-            { TIER_S_SIZE, TIER_S_COUNT },
-            { TIER_M_SIZE, TIER_M_COUNT },
-            { TIER_L_SIZE, TIER_L_COUNT },
-        },
-        .tier_count  = 3,
+        .tiers       = tiers,
+        .tier_count  = sizeof(tiers) / sizeof(tiers[0]),
         /* forbid_fallback omitted -> false: allow fallback to a larger tier */
     };
 

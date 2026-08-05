@@ -137,47 +137,57 @@ A deterministic, fragmentation-free replacement for `malloc`/`free`, built from
 several "tiers" of equally sized blocks carved out of one caller-provided buffer.
 
 - **Bounded, predictable timing** — a request is rounded up to the smallest
-  large-enough tier and served from its in-use bitmap. Free is O(1); allocation
-  scans a small bitmap bounded by the tier's block count.
-- **Zero per-block overhead** — blocks carry no header; the owning tier is found
-  by address range on free. Since blocks store no internal pointer, block sizes
-  down to a single alignment unit are usable. The tier's bitmap is contiguous and
-  separate from the data area (better cache behavior, no per-alloc overhead).
-- **Defends itself from abuse** — a double free is detected and asserted; freeing
-  an address not in any tier's range is caught; a config mismatch (block count
-  cannot fit in the bitmap / a tier's range overlaps another / size inversion
-  down the tiers) aborts init via assert.
-- **Full introspection** — every tier reports its size, count, and used count, so
-  the caller can watch the high-water mark on each tier or build a pool
-  exhaustion detector.
-- **Header-only, zero code size** — all operations (init, alloc, free, stats) are
-  `static inline`.
+  large-enough tier and served from that tier's in-use bitmap. Free is O(1);
+  allocation scans a small bitmap bounded by the tier's block count.
+- **Zero per-block overhead** — blocks carry no header; the owning tier is found by
+  address range on free. Since blocks store no internal pointer, block sizes down
+  to a single alignment unit are usable.
+- **Built-in double-free detection** — freeing an already-free block returns
+  `NX_TIERED_ERR_DOUBLE_FREE` instead of corrupting the pool, and is O(1).
+- **Fragmentation-free** — every block within a tier is the same size.
+- **Configurable fallback** — when the ideal tier is exhausted a request falls back
+  to a larger tier; set `forbid_fallback` to serve only from the best-fit tier.
+- **Runtime-sized, one buffer** — tier list and block counts are configured at init,
+  not fixed at compile time; the tier table and per-tier bitmaps are carved from the
+  same caller buffer as the blocks, so a pool costs exactly what its config needs.
+  Init reports the exact bytes required, so oversize the buffer, run once, then shrink
+  to fit. The buffer needs no particular alignment.
+- **Built-in statistics** — per tier: block size, count, free count, and peak usage
+  (high-water mark), read by index.
+- **Not thread-safe** — concurrent access must be locked by the caller.
 
 ```c
 #include "nx_tiered_mem_pool.h"
 
-/* tiers: 4 × 16-byte blocks, 4 × 64-byte blocks */
-uint8_t data[4*16 + 4*64];
+/* no special alignment needed; oversize it and let init report the exact need */
+static uint8_t mem[32 * 8 + 128 * 4 + 128];
 
-uint32_t bitmaps[2];  /* 4 bits per tier → one uint32_t each */
-
-nx_tiered_mem_pool_t pool;
-nx_tiered_mem_pool_tier_def_t defs[] = {
-    {16, 4},
-    {64, 4},
+static const nx_tiered_level_cfg_t tiers[] = {
+    { 32, 8 },     /* 8 blocks of 32 bytes  */
+    { 128, 4 },    /* 4 blocks of 128 bytes */
 };
-nx_tiered_mem_pool_init(&pool, data, sizeof(data), defs, 2, bitmaps);
 
-void *a = nx_tiered_mem_pool_alloc(&pool, 10);    /* -> 16-byte tier */
-void *b = nx_tiered_mem_pool_alloc(&pool, 50);    /* -> 64-byte tier */
+nx_tiered_mem_pool_t     pool;
+nx_tiered_mem_pool_cfg_t cfg = {
+    .memory      = mem,
+    .memory_size = sizeof(mem),
+    .tiers       = tiers,
+    .tier_count  = sizeof(tiers) / sizeof(tiers[0]),
+    /* forbid_fallback omitted -> false: a request may fall back to a larger tier */
+};
 
-nx_tiered_mem_pool_free(&pool, a);
-nx_tiered_mem_pool_free(&pool, b);
+size_t required = 0;
+nx_tiered_mem_pool_init(&pool, &cfg, &required);   /* required = exact bytes needed */
 
-/* introspection */
-for (size_t i = 0; i < pool.tier_count; i++) {
-    size_t used = nx_tiered_mem_pool_tier_used(&pool, i);
-    /* watch high-water marks, detect exhaustion, etc. */
+void *p = nx_tiered_mem_pool_alloc(&pool, 20);     /* served by the 32-byte tier */
+/* ... use p ... */
+nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from address */
+
+/* introspection: walk tiers by index */
+for (size_t i = 0; i < nx_tiered_mem_pool_tier_count(&pool); i++) {
+    nx_tiered_level_stat_t st;
+    nx_tiered_mem_pool_get_tier_stat(&pool, i, &st);
+    /* watch st.peak_used, detect exhaustion, etc. */
 }
 ```
 

@@ -169,7 +169,9 @@ static void print_tx(void)
 /* ------------------------------------------------------------------ */
 #define POOL_BLK  64
 #define POOL_NBLK 16
-static _Alignas(max_align_t) uint8_t g_pool_mem[POOL_BLK * POOL_NBLK];
+/* +256: headroom for the pool's own metadata (tier table + bitmaps), which the
+ * pool carves from this same buffer alongside the blocks. */
+static _Alignas(max_align_t) uint8_t g_pool_mem[POOL_BLK * POOL_NBLK + 256];
 
 static nx_ref_msg_t *g_respq_buf[8];
 static nx_ref_msg_t *g_valveq_buf[4];
@@ -183,10 +185,11 @@ int nx_modbus_rtu_slave_example_run(void)
 
     /* ---- pool + queues ---- */
     nx_tiered_mem_pool_t pool;
+    static const nx_tiered_level_cfg_t pool_tiers[] = { { POOL_BLK, POOL_NBLK } };
     nx_tiered_mem_pool_cfg_t pool_cfg = {
         .memory      = g_pool_mem,
         .memory_size = sizeof(g_pool_mem),
-        .tiers       = { { POOL_BLK, POOL_NBLK } },
+        .tiers       = pool_tiers,
         .tier_count  = 1,
     };
     if (nx_tiered_mem_pool_init(&pool, &pool_cfg, NULL) != NX_TIERED_OK) {

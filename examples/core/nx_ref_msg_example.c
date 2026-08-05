@@ -26,7 +26,10 @@
 /* ------------------------------------------------------------------ */
 #define POOL_BLK   64          /* block size; fits msg header + small payload */
 #define POOL_NBLK  8           /* number of blocks */
-static _Alignas(max_align_t) uint8_t g_pool_mem[POOL_BLK * POOL_NBLK];
+/* +256: headroom for the pool's own metadata (tier table + bitmaps), which the
+ * pool carves from this same buffer. Init reports the exact need via its
+ * out_required_bytes argument if you want to size it precisely. */
+static _Alignas(max_align_t) uint8_t g_pool_mem[POOL_BLK * POOL_NBLK + 256];
 
 #define QCAP 4                 /* capacity of each consumer queue */
 static nx_ref_msg_t *g_qbuf_a[QCAP];
@@ -42,11 +45,12 @@ typedef struct {
 /* Sum of free blocks across all tiers (used to prove memory is reclaimed). */
 static size_t pool_free_blocks(nx_tiered_mem_pool_t *pool)
 {
-    nx_tiered_pool_stat_t st;
-    nx_tiered_mem_pool_get_stat(pool, &st);
+    size_t n = nx_tiered_mem_pool_tier_count(pool);
     size_t f = 0;
-    for (size_t i = 0; i < st.tier_count; i++) {
-        f += st.tiers[i].free_count;
+    for (size_t i = 0; i < n; i++) {
+        nx_tiered_level_stat_t st;
+        nx_tiered_mem_pool_get_tier_stat(pool, i, &st);
+        f += st.free_count;
     }
     return f;
 }
@@ -74,10 +78,11 @@ int nx_ref_msg_example_run(void)
 
     /* ---- setup: a single-tier pool + three queues ---- */
     nx_tiered_mem_pool_t pool;
+    static const nx_tiered_level_cfg_t tiers[] = { { POOL_BLK, POOL_NBLK } };
     nx_tiered_mem_pool_cfg_t cfg = {
         .memory      = g_pool_mem,
         .memory_size = sizeof(g_pool_mem),
-        .tiers       = { { POOL_BLK, POOL_NBLK } },
+        .tiers       = tiers,
         .tier_count  = 1,
     };
     if (nx_tiered_mem_pool_init(&pool, &cfg, NULL) != NX_TIERED_OK) {

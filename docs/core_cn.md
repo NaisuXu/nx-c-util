@@ -131,26 +131,30 @@ if (src != NULL) {
 - **无碎片** —— 同一分级内每个块都一样大。
 - **可配置的向上借块** —— 理想分级用尽时自动回退到更大的分级；设 `forbid_fallback`
   可限定只用最合适的分级。
-- **单结构体配置** —— 缓冲、分级列表、策略都放在一个 `nx_tiered_mem_pool_cfg_t` 中；
-  初始化会报告实际所需字节数，因此可以把缓冲开大、跑一次后再缩到刚好合适。缓冲无需特定对齐。
-- **内置统计** —— 每级的块大小、数量、空闲数量，以及峰值占用（high-water mark）。
+- **运行期配置、单块缓冲** —— 分级列表和每级块数在 init 时配置，而非编译期固定；分级表和
+  每级的位图都和块存储一样从调用者提供的同一块缓冲里划出，因此一个池只按它自己配置所需的
+  大小付费。初始化会报告实际所需字节数，因此可以把缓冲开大、跑一次后再缩到刚好合适。缓冲无需
+  特定对齐。
+- **内置统计** —— 每级的块大小、数量、空闲数量，以及峰值占用（high-water mark），按索引读取。
 - **非线程安全** —— 并发访问必须由调用者加锁。
 
 ```c
 #include "nx_tiered_mem_pool.h"
 
 /* no special alignment needed; oversize it and let init report the exact need */
-static uint8_t mem[32 * 8 + 128 * 4];
+static uint8_t mem[32 * 8 + 128 * 4 + 128];
+
+static const nx_tiered_level_cfg_t tiers[] = {
+    { 32, 8 },     /* 8 blocks of 32 bytes  */
+    { 128, 4 },    /* 4 blocks of 128 bytes */
+};
 
 nx_tiered_mem_pool_t     pool;
 nx_tiered_mem_pool_cfg_t cfg = {
     .memory      = mem,
     .memory_size = sizeof(mem),
-    .tiers       = {
-        { 32, 8 },     /* 8 blocks of 32 bytes  */
-        { 128, 4 },    /* 4 blocks of 128 bytes */
-    },
-    .tier_count  = 2,
+    .tiers       = tiers,
+    .tier_count  = sizeof(tiers) / sizeof(tiers[0]),
     /* forbid_fallback omitted -> false: a request may fall back to a larger tier */
 };
 
@@ -160,6 +164,13 @@ nx_tiered_mem_pool_init(&pool, &cfg, &required);   /* required = exact bytes nee
 void *p = nx_tiered_mem_pool_alloc(&pool, 20);     /* served by the 32-byte tier */
 /* ... use p ... */
 nx_tiered_mem_pool_free(&pool, p);                 /* owning tier inferred from address */
+
+/* introspection: walk tiers by index */
+for (size_t i = 0; i < nx_tiered_mem_pool_tier_count(&pool); i++) {
+    nx_tiered_level_stat_t st;
+    nx_tiered_mem_pool_get_tier_stat(&pool, i, &st);
+    /* watch st.peak_used, detect exhaustion, etc. */
+}
 ```
 
 
