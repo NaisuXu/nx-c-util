@@ -19,7 +19,7 @@
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock）
+│   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log）
 │   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, modbus_rtu_slave, can_bus，未来：can_isotp）
 │   ├── algo/         # 算法（crc, sha256）
 │   └── device/       # 平台无关的设备驱动（ws2812）
@@ -45,6 +45,7 @@ nx-c-util/
 - [nx_timer](docs/core_cn.md#nx_timer--软件定时器管理器) — 软件定时器管理器
 - [nx_coro](docs/core_cn.md#nx_coro--无栈协程) — 无栈协程
 - [nx_lock](docs/core_cn.md#nx_lock--可插拔的临界区抽象) — 可插拔的临界区抽象
+- [nx_log](docs/core_cn.md#nx_log--静态异步明文日志) — 静态异步明文日志
 
 详细说明和示例请参阅[核心模块文档](docs/core_cn.md)。
 

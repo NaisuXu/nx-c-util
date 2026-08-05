@@ -363,3 +363,65 @@ nx_lock_exit(&g_lock, s);
 > （见上面 `nx_queue` 的说明）；在多核 MCU 上，关中断只能守护本核 —— 那里要用真正的
 > 自旋锁。
 
+### nx_log —— 静态异步明文日志
+
+一个日志设施：用 `vsnprintf` 把消息格式化进调用方持有的环形缓冲，再由主循环里单次
+`nx_log_process` 调用把缓冲排空到注入的写 sink。格式化与慢速、可能阻塞的 sink 解耦，
+因此生产者（哪怕在中断里）从不等待 I/O。不使用动态内存。
+
+- **明文** —— 消息由 `vsnprintf` 格式化，带 `[级别] [tick] 文件:行: ` 前缀，因此串口终端上
+  直接可读，零解码工具门槛。tick 时间戳取自注入的 `get_tick` 源，该回调为 NULL 时省略时间戳。
+- **异步投递** —— 格式化后的一行被压入字节环形缓冲；`nx_log_process` 之后用环形缓冲的连续段
+  辅助函数把连续段交给 sink。生产者与 sink 的时延解耦，且 sink 只在一处（主循环）运行，而不
+  在每个调用点运行。
+- **sink 可选，或从内存拉取** —— `write` sink 可为 NULL：此时日志只是在缓冲里累积，由调用方按需
+  用 `nx_log_read` 拉出来（调试命令行、诊断命令），或在调试器里直接看缓冲。适合没有实时输出接口
+  的设备。
+- **零分配、缓冲由调用方持有** —— 环形缓冲存储在配置里给出（`buffer` / `buffer_size`）；模块
+  自身不做任何分配。
+- **两级级别过滤** —— `NX_LOG_COMPILE_LEVEL` 在编译期裁掉比它更啰嗦的调用点，其格式串根本不进
+  镜像；运行期 `level` 过滤其余部分，并可用 `nx_log_set_level` 动态改变。
+- **整行或不写，带满缓冲策略** —— 绝不写半行。缓冲装不下新行时，由 `on_full` 决定：
+  `NX_LOG_ON_FULL_OVERWRITE_OLD`（默认）淘汰最旧的整行腾出空间，因此最新的日志一定留存 ——
+  契合在调试器里查看"崩溃前刚刚发生了什么"；`NX_LOG_ON_FULL_DROP_NEW` 则保留最旧、丢弃新行。
+  两种方式丢掉的行都由 `nx_log_dropped` 计数。
+- **可选加锁** —— 单生产者/单消费者场景无需锁；多个上下文并发写入时，调用方在配置里给一个
+  `nx_lock`，模块只用它包住 O(1) 的入队那一步。
+
+```c
+#include "nx_log.h"
+
+static uint8_t log_buf[512];   /* caller-owned ring-buffer storage */
+
+/* the sink: push the drained bytes out a UART (blocking is fine, it runs
+ * on the main loop, not in the producer). */
+static void uart_sink(void *ctx, const uint8_t *data, size_t len) {
+    uart_send(ctx, data, len);
+}
+
+nx_log_t log;
+nx_log_cfg_t cfg = {
+    .buffer      = log_buf,
+    .buffer_size = sizeof(log_buf),
+    .write       = uart_sink,
+    .io_ctx      = &uart0,
+    .get_tick    = board_millis,   /* NULL to omit the timestamp */
+    .level       = NX_LOG_LEVEL_INFO,
+    .lock        = NULL,           /* set for multi-producer logging */
+};
+nx_log_init(&log, &cfg);
+
+NX_LOGI(&log, "link up, addr=%u", addr);   /* enqueued */
+NX_LOGD(&log, "raw=%02x", byte);           /* below INFO -> filtered out */
+
+for (;;) {
+    nx_log_process(&log);   /* drain queued bytes to the sink */
+    /* ... rest of the main loop ... */
+}
+```
+
+> **注意：** 日志分两步 —— 一次 `NX_LOGx` 调用只*格式化并入队*；只有当主循环运行 `nx_log_process`
+> （或无 sink 时用 `nx_log_read` 拉取）字节才离开缓冲。按两次排空之间预期的突发量给 `buffer`
+> 定尺寸：一旦装满，由 `on_full` 决定是丢弃新行（并由 `nx_log_dropped` 计数）还是淘汰最旧的行 ——
+> 两种方式都绝不写半行。仅当多个上下文写入同一个句柄时才设置 `lock`。
+

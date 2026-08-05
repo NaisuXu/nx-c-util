@@ -22,7 +22,7 @@ Every component follows the same design philosophy:
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock)
+│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log)
 │   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, can_bus, future: can_isotp)
 │   ├── algo/         # Algorithms (crc, sha256)
 │   └── device/       # Platform-independent device drivers (ws2812)
@@ -49,6 +49,7 @@ containing the copied files to your include path.
 - [nx_timer](docs/core_en.md#nx_timer--software-timer-manager) — software timer manager
 - [nx_coro](docs/core_en.md#nx_coro--stackless-coroutines) — stackless coroutines
 - [nx_lock](docs/core_en.md#nx_lock--pluggable-critical-section-abstraction) — pluggable critical-section abstraction
+- [nx_log](docs/core_en.md#nx_log--static-asynchronous-plain-text-logging) — static asynchronous plain-text logging
 
 See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and examples.
 

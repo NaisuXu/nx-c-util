@@ -406,3 +406,81 @@ nx_queue_t q;
 nx_queue_init(&q, storage, sizeof(int), 4, NX_QUEUE_ON_FULL_REJECT);
 /* push/pop internally call NX_LOCK_ACQUIRE / RELEASE */
 ```
+
+## nx_log — static asynchronous plain-text logging
+
+A logging facility that formats a message with `vsnprintf` into a caller-owned
+ring buffer, then drains that buffer to an injected write sink from a single
+`nx_log_process` call on the main loop. Formatting is decoupled from the slow,
+possibly blocking sink, so a producer — even one in an interrupt — never waits on
+I/O. No dynamic memory.
+
+- **Plain text** — messages are formatted with `vsnprintf` and carry a
+  `[level] [tick] file:line: ` prefix, so the output is readable directly on a
+  serial terminal with no decoding tool. The tick timestamp comes from an
+  injected `get_tick` source and is omitted when that callback is NULL.
+- **Asynchronous delivery** — a formatted line is enqueued into a byte ring
+  buffer; `nx_log_process` later hands the sink its contiguous segments via the
+  ring buffer's linear helpers. Producers are decoupled from the sink's latency,
+  and the sink runs in one place (the main loop) rather than in every call site.
+- **Optional sink, or pull from memory** — the `write` sink may be NULL: the log
+  then just accumulates in the buffer, and the caller pulls it out on demand with
+  `nx_log_read` (a debug shell, a diagnostic command) or inspects the buffer
+  directly in a debugger. That fits a device with no live output interface.
+- **Zero allocation, caller-owned buffer** — the ring-buffer storage is supplied
+  in the config (`buffer` / `buffer_size`); the module allocates nothing.
+- **Two-stage level filtering** — `NX_LOG_COMPILE_LEVEL` strips call sites more
+  verbose than it at compile time, so their format strings never reach the image;
+  a runtime `level` filters what remains and can change on the fly with
+  `nx_log_set_level`.
+- **Whole-line-or-nothing, with a full-buffer policy** — a line is never written
+  half-way. When the buffer cannot hold a new line, `on_full` decides:
+  `NX_LOG_ON_FULL_OVERWRITE_OLD` (the default) evicts the oldest whole lines to
+  make room, so the freshest log always survives — the fit for inspecting "what
+  happened just before the crash" in a debugger; `NX_LOG_ON_FULL_DROP_NEW` keeps
+  the oldest and drops the new line instead. Either way `nx_log_dropped` counts
+  the lines lost.
+- **Optional locking** — a single-producer/single-consumer setup needs no lock;
+  when several contexts log concurrently the caller supplies an `nx_lock` in the
+  config and the module wraps only the O(1) enqueue step in it.
+
+```c
+#include "nx_log.h"
+
+static uint8_t log_buf[512];   /* caller-owned ring-buffer storage */
+
+/* the sink: push the drained bytes out a UART (blocking is fine, it runs
+ * on the main loop, not in the producer). */
+static void uart_sink(void *ctx, const uint8_t *data, size_t len) {
+    uart_send(ctx, data, len);
+}
+
+nx_log_t log;
+nx_log_cfg_t cfg = {
+    .buffer      = log_buf,
+    .buffer_size = sizeof(log_buf),
+    .write       = uart_sink,
+    .io_ctx      = &uart0,
+    .get_tick    = board_millis,   /* NULL to omit the timestamp */
+    .level       = NX_LOG_LEVEL_INFO,
+    .lock        = NULL,           /* set for multi-producer logging */
+};
+nx_log_init(&log, &cfg);
+
+NX_LOGI(&log, "link up, addr=%u", addr);   /* enqueued */
+NX_LOGD(&log, "raw=%02x", byte);           /* below INFO -> filtered out */
+
+for (;;) {
+    nx_log_process(&log);   /* drain queued bytes to the sink */
+    /* ... rest of the main loop ... */
+}
+```
+
+> **Note:** logging is a two-step affair — a `NX_LOGx` call only *formats and
+> enqueues*; the bytes leave the buffer only when `nx_log_process` runs on the
+> main loop (or `nx_log_read` pulls them out when there is no sink). Size `buffer`
+> for the burst you expect between drains: once it is full, `on_full` decides
+> whether the new line is dropped (and counted by `nx_log_dropped`) or the oldest
+> lines are evicted — either way a line is never written half-way. Set `lock` only
+> when more than one context logs into the same handle.
+

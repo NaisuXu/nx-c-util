@@ -17,6 +17,7 @@ set(NX_CORE_SOURCES
     src/core/nx_tiered_mem_pool.c
     src/core/nx_ref_msg.c
     src/core/nx_timer.c
+    src/core/nx_log.c
 )
 
 set(NX_ALGO_SOURCES
@@ -43,6 +44,7 @@ add_executable(nx_core_examples
     examples/core/nx_ref_msg_example.c
     examples/core/nx_timer_example.c
     examples/core/nx_coro_example.c
+    examples/core/nx_log_example.c
     ${NX_CORE_SOURCES}
 )
 
