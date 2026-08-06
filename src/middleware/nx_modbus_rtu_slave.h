@@ -5,7 +5,7 @@
  * This is the link/dispatch layer on top of nx_modbus_rtu.h (frame structs + CRC).
  * It owns no business logic. Its whole job is:
  *   1. pull bytes from the wire, slice out complete RTU frames, validate CRC and
- *      the slave address;
+ *      the slave address (unicast always, broadcast only if @c accept_broadcast);
  *   2. route each valid request to whatever business module(s) subscribed to it,
  *      by (function code + address range), as a zero-copy reference-counted message
  *      (nx_ref_msg) - one request can fan out to several subscribers;
@@ -88,6 +88,11 @@ typedef struct {
 
     uint32_t  baud_rate;    /**< Line baud; used to derive the TX inter-frame gap
                                  (3.5 chars). 0 = no inter-frame gap is enforced. */
+
+    bool      accept_broadcast;  /**< true = also accept frames addressed to the
+                                 broadcast address (0); such a request is dispatched
+                                 to its subscribers but never answered. false
+                                 (default) drops them, handling only unicast. */
 
     nx_tiered_mem_pool_t *pool;      /**< Pool for request/response ref-messages */
 

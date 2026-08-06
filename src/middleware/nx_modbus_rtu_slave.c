@@ -237,7 +237,9 @@ static void slave_rx(nx_modbus_rtu_slave_t *s)
         uint8_t *p    = s->cfg.rx_buf + front;
         size_t   have = s->run.rx_len - front;
 
-        if (p[0] != s->cfg.slave_addr && p[0] != NX_MODBUS_RTU_ADDR_BROADCAST) {
+        /* Accept our unicast address; broadcast only when configured to answer it. */
+        const bool is_bcast = (p[0] == NX_MODBUS_RTU_ADDR_BROADCAST);
+        if (p[0] != s->cfg.slave_addr && !(is_bcast && s->cfg.accept_broadcast)) {
             front++;                  /* not for us: resync one byte */
             continue;
         }

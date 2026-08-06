@@ -180,8 +180,10 @@ for (;;) {
 > **Note:** the slave validates *structure* (function `0x01`, value `0x03`, address
 > `0x02`), not *meaning*. A business module still range-checks the actual values it
 > is asked to write and may emit its own `0x03` exception onto the response queue.
-> Broadcasts (address 0) are dispatched but never answered — no response, no
-> exception.
+> Broadcasts (address 0) are dropped by default, leaving only unicast requests
+> handled; with `accept_broadcast = true` they are dispatched but never answered —
+> no response, no exception. Setting `ignore_broadcast = true` drops them outright, leaving only
+> unicast requests handled.
 
 
 

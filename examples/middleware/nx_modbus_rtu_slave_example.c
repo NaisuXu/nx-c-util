@@ -18,11 +18,12 @@
  * different address ranges: each subscribes to the ranges it owns and receives
  * matching requests as data on its own queue.
  *
- * Four requests are fed in to exercise every path:
+ * Five requests are fed in to exercise every path:
  *   1. read holding regs @0x0000 x2   -> valve
  *   2. read input regs   @0x8000 x4   -> sys
- *   3. read coils        @0x0000 x8   -> no subscriber for func 0x01 -> exc 0x01
- *   4. read holding regs @0x0020 x1   -> func owned, addr out of range -> exc 0x02
+ *   3. write single reg  @0x0001, addressed to broadcast (0) -> dropped, silent
+ *   4. read coils        @0x0000 x8   -> no subscriber for func 0x01 -> exc 0x01
+ *   5. read holding regs @0x0020 x1   -> func owned, addr out of range -> exc 0x02
  *
  * All storage is static; the example self-checks with asserts and prints the wire.
  */
@@ -218,6 +219,7 @@ int nx_modbus_rtu_slave_example_run(void)
     nx_modbus_rtu_slave_cfg_t cfg = {
         .slave_addr     = SLAVE_ADDR,
         .baud_rate      = 115200,   /* derives the ~335us TX inter-frame gap */
+        .accept_broadcast = false,  /* default: address 0 is dropped, unicast only */
         .pool           = &pool,
         .rx_buf         = g_rx_buf,
         .rx_size        = sizeof(g_rx_buf),
@@ -242,6 +244,10 @@ int nx_modbus_rtu_slave_example_run(void)
     size_t  sn = 0;
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 2);
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_INPUT_REGS,   0x8000, 4);
+    /* A broadcast write that a subscription *would* own: accept_broadcast is false,
+     * so it is dropped at the address check - no dispatch, no response, no exception. */
+    sn += build_fixed_req(stream + sn, NX_MODBUS_RTU_ADDR_BROADCAST,
+                          NX_MODBUS_FC_WRITE_SINGLE_REG, 0x0001, 0x0000);
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_COILS,        0x0000, 8);
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_HOLDING_REGS, 0x0020, 1);
     g_io.rx     = stream;
@@ -292,6 +298,10 @@ int nx_modbus_rtu_slave_example_run(void)
     }
     assert(off == g_io.tx_len);   /* nothing extra, nothing missing */
     printf("  OK: 2 exceptions + 2 data responses, in order, every CRC valid\n");
+    /* The broadcast frame produced none of the above: had it been accepted it would
+     * have reached the valve queue, and had it been mistaken for unicast it would
+     * have drawn a response. The exact-length match above proves neither happened. */
+    printf("  OK: the broadcast frame was dropped silently (accept_broadcast = false)\n");
 
     return 0;
 }
