@@ -33,7 +33,7 @@ bool nx_ws2812_init(nx_ws2812_t           *ws2812,
         return false;
     }
 
-    ws2812->cfg        = cfg;
+    ws2812->cfg        = *cfg;   /* copy the config struct into the handle */
     ws2812->pixels     = pixel_buffer;
     ws2812->tx         = tx_buffer;
     ws2812->brightness = 255U;   /* unscaled until the caller says otherwise */
@@ -49,10 +49,10 @@ bool nx_ws2812_set_pixel(nx_ws2812_t *ws2812,
                          uint8_t      g,
                          uint8_t      b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
-    if (index >= ws2812->cfg->led_count) {
+    if (index >= ws2812->cfg.led_count) {
         return false;
     }
 
@@ -72,7 +72,7 @@ bool nx_ws2812_fill(nx_ws2812_t *ws2812,
                     uint8_t      g,
                     uint8_t      b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
     if (count == 0U) {
@@ -80,7 +80,7 @@ bool nx_ws2812_fill(nx_ws2812_t *ws2812,
     }
 
     /* Reject out-of-range without overflowing: first + count could wrap. */
-    size_t led_count = ws2812->cfg->led_count;
+    size_t led_count = ws2812->cfg.led_count;
     if (first >= led_count || count > led_count - first) {
         return false;
     }
@@ -101,14 +101,14 @@ bool nx_ws2812_push(nx_ws2812_t *ws2812,
                     uint8_t      g,
                     uint8_t      b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
     if (count == 0U) {
         return true;   /* nothing pushed in, nothing shifted */
     }
 
-    size_t led_count = ws2812->cfg->led_count;
+    size_t led_count = ws2812->cfg.led_count;
 
     /* Pushing in at least a full strip's worth shifts everything off the end. */
     if (count >= led_count) {
@@ -132,14 +132,14 @@ bool nx_ws2812_push_tail(nx_ws2812_t *ws2812,
                          uint8_t      g,
                          uint8_t      b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
     if (count == 0U) {
         return true;   /* nothing pushed in, nothing shifted */
     }
 
-    size_t led_count = ws2812->cfg->led_count;
+    size_t led_count = ws2812->cfg.led_count;
 
     /* Pushing in at least a full strip's worth shifts everything off the head. */
     if (count >= led_count) {
@@ -158,11 +158,11 @@ bool nx_ws2812_push_tail(nx_ws2812_t *ws2812,
 
 bool nx_ws2812_clear(nx_ws2812_t *ws2812)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
 
-    memset(ws2812->pixels, 0, ws2812->cfg->led_count * NX_WS2812_BYTES_PER_LED);
+    memset(ws2812->pixels, 0, ws2812->cfg.led_count * NX_WS2812_BYTES_PER_LED);
 
     return true;
 }
@@ -182,20 +182,19 @@ uint8_t nx_ws2812_get_brightness(const nx_ws2812_t *ws2812)
 
 bool nx_ws2812_busy(const nx_ws2812_t *ws2812)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->cfg->is_busy == NULL) {
+    if (ws2812 == NULL || ws2812->cfg.is_busy == NULL) {
         return false;   /* no way to tell, so report idle */
     }
-    return ws2812->cfg->is_busy(ws2812->cfg->io_ctx);
+    return ws2812->cfg.is_busy(ws2812->cfg.io_ctx);
 }
 
 bool nx_ws2812_update(nx_ws2812_t *ws2812)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL ||
-        ws2812->pixels == NULL || ws2812->tx == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL || ws2812->tx == NULL) {
         return false;
     }
 
-    const nx_ws2812_cfg_t *cfg = ws2812->cfg;
+    const nx_ws2812_cfg_t *cfg = &ws2812->cfg;
 
     /* Bail out before writing a single byte: the transfer buffer may still be
      * feeding the peripheral, so re-encoding into it now would corrupt the frame
@@ -233,10 +232,10 @@ bool nx_ws2812_get_pixel(const nx_ws2812_t *ws2812,
                          uint8_t           *out_g,
                          uint8_t           *out_b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL || ws2812->pixels == NULL) {
+    if (ws2812 == NULL || ws2812->pixels == NULL) {
         return false;
     }
-    if (index >= ws2812->cfg->led_count) {
+    if (index >= ws2812->cfg.led_count) {
         return false;
     }
 

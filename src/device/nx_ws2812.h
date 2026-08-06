@@ -125,7 +125,7 @@ typedef struct {
  * Opaque handle; initialize with nx_ws2812_init.
  */
 typedef struct {
-    const nx_ws2812_cfg_t *cfg;  /**< Config reference (must outlive this instance) */
+    nx_ws2812_cfg_t cfg;         /**< Configuration (copied at init) */
     uint8_t *pixels;             /**< Pixel buffer: 3 bytes per LED (GRB order), caller-owned */
     uint8_t *tx;                 /**< Transfer buffer for encoded output, caller-owned */
     uint8_t  brightness;         /**< Global scale applied at encode time; 255 = full */
@@ -138,7 +138,7 @@ typedef struct {
  * allocates nothing. Neither may alias the other.
  *
  * @param  ws2812       Driver instance, must not be NULL.
- * @param  cfg          Configuration, must not be NULL and must outlive @p ws2812.
+ * @param  cfg          Configuration, must not be NULL; copied into @p ws2812.
  * @param  pixel_buffer Color state, NX_WS2812_PIXEL_BUF_SIZE(cfg->led_count) bytes.
  * @param  tx_buffer    Encoded output, at least
  *                      NX_WS2812_TX_BUF_SIZE(cfg->led_count, cfg->reset_bytes)
@@ -213,10 +213,10 @@ static inline bool nx_ws2812_set_all(nx_ws2812_t *ws2812,
                                      uint8_t      g,
                                      uint8_t      b)
 {
-    if (ws2812 == NULL || ws2812->cfg == NULL) {
+    if (ws2812 == NULL) {
         return false;
     }
-    return nx_ws2812_fill(ws2812, 0, ws2812->cfg->led_count, r, g, b);
+    return nx_ws2812_fill(ws2812, 0, ws2812->cfg.led_count, r, g, b);
 }
 
 /**
