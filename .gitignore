@@ -46,6 +46,7 @@ Testing/
 *.swp
 *.swo
 *~
+CLAUDE.md
 
 # ---- OS junk ----
 .DS_Store

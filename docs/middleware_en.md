@@ -142,6 +142,10 @@ and it is driven from the main loop by a single `process()` call.
   `io_ctx`, which may stay NULL when the driver is a single module-owned instance;
   `dir_tx` takes its own `dir_ctx` (the DE pin is often a separate GPIO), and `get_us`
   takes no context as a system-wide time source.
+- **Exception replies for business modules** — `nx_modbus_rtu_slave_reply_exception()`
+  builds an exception response from the address and function code in the request frame
+  and queues it. It takes only the pool and the response queue, so a business module
+  needs no slave handle; a broadcast request builds no frame and returns false.
 - **Allocates nothing itself** — the RX framing buffer, the tiered pool behind every
   message, and the shared response queue are all caller-owned. Out of memory degrades
   gracefully: the response is dropped and the master simply times out.
@@ -182,8 +186,7 @@ for (;;) {
 > is asked to write and may emit its own `0x03` exception onto the response queue.
 > Broadcasts (address 0) are dropped by default, leaving only unicast requests
 > handled; with `accept_broadcast = true` they are dispatched but never answered —
-> no response, no exception. Setting `ignore_broadcast = true` drops them outright, leaving only
-> unicast requests handled.
+> no response, no exception.
 
 
 

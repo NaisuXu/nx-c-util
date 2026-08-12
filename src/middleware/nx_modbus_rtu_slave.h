@@ -174,6 +174,28 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
  */
 void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s);
 
+/**
+ * @brief  Build an exception response for a received request and queue it for sending.
+ *
+ * For subscriber use: a business module that finds a request unacceptable answers it
+ * with this. The reply's address and function code are taken from @p request.
+ *
+ * @param  pool           Pool the response is allocated from, must not be NULL.
+ * @param  response_queue Queue the slave transmits from, must not be NULL.
+ * @param  request        Header of the request being answered, must not be NULL. Only
+ *                        @c addr and @c cmd are read, so any request frame can be cast
+ *                        to this type.
+ * @param  exception_code Exception code to report; one of nx_modbus_exc_t.
+ *
+ * @return true if the response was queued; false if nothing was queued (broadcast
+ *         request, NULL argument, pool exhausted, or queue full), in which case the
+ *         master times out. A caller has no repair to make in any of these cases.
+ */
+bool nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t         *pool,
+                                         nx_queue_t                   *response_queue,
+                                         const nx_modbus_rtu_header_t *request,
+                                         uint8_t                       exception_code);
+
 #ifdef __cplusplus
 }
 #endif

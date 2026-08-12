@@ -127,21 +127,13 @@ static uint8_t request_value_exc(uint8_t cmd, const uint8_t *f)
 /* Dispatch                                                           */
 /* ------------------------------------------------------------------ */
 
-/** Build an exception response and push it onto the response queue. */
-static void send_exception(nx_modbus_rtu_slave_t *s, uint8_t cmd, uint8_t exc)
+/**
+ * @brief Answer a request with an exception response; a broadcast is left unanswered.
+ */
+static void send_exception(nx_modbus_rtu_slave_t *s, const uint8_t *frame, uint8_t exc)
 {
-    nx_ref_msg_t *msg = nx_ref_msg_alloc(s->cfg.pool, sizeof(nx_modbus_rtu_rsp_exc_t));
-    if (msg == NULL) {
-        return;                       /* out of memory: master will time out */
-    }
-    nx_modbus_rtu_rsp_exc_t *r = (nx_modbus_rtu_rsp_exc_t *)nx_ref_msg_data(msg);
-    r->addr           = s->cfg.slave_addr;
-    r->cmd            = (uint8_t)(cmd | NX_MODBUS_RTU_EXCEPTION_FLAG);
-    r->exception_code = exc;
-    nx_modbus_rtu_set_crc((uint8_t *)r, sizeof(*r));
-
-    (void)nx_ref_msg_publish(msg, s->cfg.response_queue);   /* full queue -> dropped */
-    nx_ref_msg_release(msg);
+    (void)nx_modbus_rtu_slave_reply_exception(s->cfg.pool, s->cfg.response_queue,
+                                              (const nx_modbus_rtu_header_t *)frame, exc);
 }
 
 /**
@@ -154,9 +146,7 @@ static void send_exception(nx_modbus_rtu_slave_t *s, uint8_t cmd, uint8_t exc)
  */
 static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen)
 {
-    const uint8_t addr      = frame[0];
-    const uint8_t cmd       = frame[1];
-    const bool    broadcast = (addr == NX_MODBUS_RTU_ADDR_BROADCAST);
+    const uint8_t cmd = frame[1];
 
     /* 1. Function support: is this code claimed by any subscription? */
     bool func_ok = false;
@@ -167,18 +157,14 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
         }
     }
     if (!func_ok) {
-        if (!broadcast) {
-            send_exception(s, cmd, NX_MODBUS_EXC_ILLEGAL_FUNCTION);
-        }
+        send_exception(s, frame, NX_MODBUS_EXC_ILLEGAL_FUNCTION);
         return;
     }
 
     /* 2. Structural value legality (quantity range, byte_count vs quantity). */
     uint8_t exc = request_value_exc(cmd, frame);
     if (exc != 0u) {
-        if (!broadcast) {
-            send_exception(s, cmd, exc);
-        }
+        send_exception(s, frame, exc);
         return;
     }
 
@@ -196,9 +182,7 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
         if (msg == NULL) {
             msg = nx_ref_msg_alloc(s->cfg.pool, flen);
             if (msg == NULL) {
-                if (!broadcast) {
-                    send_exception(s, cmd, NX_MODBUS_EXC_SLAVE_DEVICE_FAILURE);
-                }
+                send_exception(s, frame, NX_MODBUS_EXC_SLAVE_DEVICE_FAILURE);
                 return;
             }
             memcpy(nx_ref_msg_data(msg), frame, flen);
@@ -212,9 +196,7 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
     }
 
     /* Function supported and frame well-formed, but no subscriber owns the span. */
-    if (!broadcast) {
-        send_exception(s, cmd, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
-    }
+    send_exception(s, frame, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
 }
 
 /* ------------------------------------------------------------------ */
@@ -393,4 +375,35 @@ void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s)
     }
     slave_rx(s);
     slave_tx(s);
+}
+
+bool nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t         *pool,
+                                         nx_queue_t                   *response_queue,
+                                         const nx_modbus_rtu_header_t *request,
+                                         uint8_t                       exception_code)
+{
+    if (pool == NULL || response_queue == NULL || request == NULL) {
+        return false;
+    }
+    /* A broadcast is never answered: taking the address from the request means the
+     * check and the frame's address field can never disagree. */
+    if (request->addr == NX_MODBUS_RTU_ADDR_BROADCAST) {
+        return false;
+    }
+
+    nx_ref_msg_t *msg = nx_ref_msg_alloc(pool, sizeof(nx_modbus_rtu_rsp_exc_t));
+    if (msg == NULL) {
+        return false;                 /* out of memory: master will time out */
+    }
+
+    nx_modbus_rtu_rsp_exc_t *r = (nx_modbus_rtu_rsp_exc_t *)nx_ref_msg_data(msg);
+    r->addr           = request->addr;
+    r->cmd            = (uint8_t)(request->cmd | NX_MODBUS_RTU_EXCEPTION_FLAG);
+    r->exception_code = exception_code;
+    nx_modbus_rtu_set_crc((uint8_t *)r, sizeof(*r));
+
+    bool queued = (nx_ref_msg_publish(msg, response_queue) == NX_REF_MSG_OK);
+    nx_ref_msg_release(msg);          /* drop the producer reference either way */
+
+    return queued;
 }
