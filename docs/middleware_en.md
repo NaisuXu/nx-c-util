@@ -142,10 +142,15 @@ and it is driven from the main loop by a single `process()` call.
   `io_ctx`, which may stay NULL when the driver is a single module-owned instance;
   `dir_tx` takes its own `dir_ctx` (the DE pin is often a separate GPIO), and `get_us`
   takes no context as a system-wide time source.
-- **Exception replies for business modules** — `nx_modbus_rtu_slave_reply_exception()`
-  builds an exception response from the address and function code in the request frame
-  and queues it. It takes only the pool and the response queue, so a business module
-  needs no slave handle; a broadcast request builds no frame and returns false.
+- **Reply helpers for business modules** — three builders cover every answer a module can
+  give: `nx_modbus_rtu_slave_reply_read()` wraps the data it gathered behind a byte count,
+  `nx_modbus_rtu_slave_reply_write()` builds the write confirmation that echoes the request,
+  and `nx_modbus_rtu_slave_reply_exception()` reports a code. Each takes only the pool and
+  the response queue, so a business module needs no slave handle; the reply's address and
+  function code are taken from the request frame. All three return an
+  `nx_modbus_rtu_slave_ret_t` that names why a reply was not queued — `ERR_NOMEM` and
+  `ERR_FULL` are the resource shortages worth logging, `ERR_BROADCAST` is the normal
+  outcome for a broadcast request, `ERR_PARAM` a caller bug.
 - **Allocates nothing itself** — the RX framing buffer, the tiered pool behind every
   message, and the shared response queue are all caller-owned. Out of memory degrades
   gracefully: the response is dropped and the master simply times out.

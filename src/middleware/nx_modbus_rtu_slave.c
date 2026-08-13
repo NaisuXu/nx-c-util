@@ -377,33 +377,123 @@ void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s)
     slave_tx(s);
 }
 
-bool nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t         *pool,
-                                         nx_queue_t                   *response_queue,
-                                         const nx_modbus_rtu_header_t *request,
-                                         uint8_t                       exception_code)
+/* ------------------------------------------------------------------ */
+/* Response helpers (shared by the three public reply_* builders)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief Whether a reply may be built at all: arguments present, and not a broadcast.
+ *
+ * Taking the address from the request means this check and the reply's address field
+ * can never disagree.
+ *
+ * @return NX_MODBUS_RTU_SLAVE_OK when a reply may be built.
+ */
+static nx_modbus_rtu_slave_ret_t reply_allowed(const nx_tiered_mem_pool_t   *pool,
+                                               const nx_queue_t             *response_queue,
+                                               const nx_modbus_rtu_header_t *request)
 {
     if (pool == NULL || response_queue == NULL || request == NULL) {
-        return false;
+        return NX_MODBUS_RTU_SLAVE_ERR_PARAM;
     }
-    /* A broadcast is never answered: taking the address from the request means the
-     * check and the frame's address field can never disagree. */
     if (request->addr == NX_MODBUS_RTU_ADDR_BROADCAST) {
-        return false;
+        return NX_MODBUS_RTU_SLAVE_ERR_BROADCAST;
+    }
+    return NX_MODBUS_RTU_SLAVE_OK;
+}
+
+/**
+ * @brief Stamp a built frame's CRC, queue it, and drop the producer reference.
+ * @return NX_MODBUS_RTU_SLAVE_OK if the response was queued, ERR_FULL if the queue was.
+ */
+static nx_modbus_rtu_slave_ret_t reply_send(nx_ref_msg_t *msg, nx_queue_t *response_queue,
+                                            size_t len)
+{
+    nx_modbus_rtu_set_crc((uint8_t *)nx_ref_msg_data(msg), len);
+
+    bool queued = (nx_ref_msg_publish(msg, response_queue) == NX_REF_MSG_OK);
+    nx_ref_msg_release(msg);          /* drop the producer reference either way */
+
+    return queued ? NX_MODBUS_RTU_SLAVE_OK : NX_MODBUS_RTU_SLAVE_ERR_FULL;
+}
+
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_read(nx_tiered_mem_pool_t         *pool,
+                                                         nx_queue_t                   *response_queue,
+                                                         const nx_modbus_rtu_header_t *request,
+                                                         const uint8_t                *data,
+                                                         size_t                        len)
+{
+    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, request);
+    if (ret != NX_MODBUS_RTU_SLAVE_OK) {
+        return ret;
+    }
+    /* addr + cmd + byte_count (3) + data + crc (2) must fit one ADU. */
+    if (data == NULL || len == 0u || len > (NX_MODBUS_RTU_MAX_ADU - 5u)) {
+        return NX_MODBUS_RTU_SLAVE_ERR_PARAM;
+    }
+
+    const size_t rsp_len = sizeof(nx_modbus_rtu_rsp_var_t) + len + 2u;
+
+    nx_ref_msg_t *msg = nx_ref_msg_alloc(pool, rsp_len);
+    if (msg == NULL) {
+        return NX_MODBUS_RTU_SLAVE_ERR_NOMEM;   /* master will time out */
+    }
+
+    nx_modbus_rtu_rsp_var_t *r = (nx_modbus_rtu_rsp_var_t *)nx_ref_msg_data(msg);
+    r->addr       = request->addr;
+    r->cmd        = request->cmd;
+    r->byte_count = (uint8_t)len;
+    memcpy(r->payload, data, len);
+
+    return reply_send(msg, response_queue, rsp_len);
+}
+
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_write(nx_tiered_mem_pool_t          *pool,
+                                                          nx_queue_t                    *response_queue,
+                                                          const nx_modbus_rtu_req_fix_t *request)
+{
+    nx_modbus_rtu_slave_ret_t ret =
+        reply_allowed(pool, response_queue, (const nx_modbus_rtu_header_t *)request);
+    if (ret != NX_MODBUS_RTU_SLAVE_OK) {
+        return ret;
+    }
+
+    nx_ref_msg_t *msg = nx_ref_msg_alloc(pool, sizeof(nx_modbus_rtu_rsp_fix_t));
+    if (msg == NULL) {
+        return NX_MODBUS_RTU_SLAVE_ERR_NOMEM;   /* master will time out */
+    }
+
+    /* The response echoes the request's first six bytes; only the CRC is recomputed. */
+    nx_modbus_rtu_rsp_fix_t *r = (nx_modbus_rtu_rsp_fix_t *)nx_ref_msg_data(msg);
+    r->addr   = request->addr;
+    r->cmd    = request->cmd;
+    r->addr_h = request->addr_h;
+    r->addr_l = request->addr_l;
+    r->data_h = request->qty_h;
+    r->data_l = request->qty_l;
+
+    return reply_send(msg, response_queue, sizeof(*r));
+}
+
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t         *pool,
+                                                              nx_queue_t                   *response_queue,
+                                                              const nx_modbus_rtu_header_t *request,
+                                                              uint8_t                       exception_code)
+{
+    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, request);
+    if (ret != NX_MODBUS_RTU_SLAVE_OK) {
+        return ret;
     }
 
     nx_ref_msg_t *msg = nx_ref_msg_alloc(pool, sizeof(nx_modbus_rtu_rsp_exc_t));
     if (msg == NULL) {
-        return false;                 /* out of memory: master will time out */
+        return NX_MODBUS_RTU_SLAVE_ERR_NOMEM;   /* master will time out */
     }
 
     nx_modbus_rtu_rsp_exc_t *r = (nx_modbus_rtu_rsp_exc_t *)nx_ref_msg_data(msg);
     r->addr           = request->addr;
     r->cmd            = (uint8_t)(request->cmd | NX_MODBUS_RTU_EXCEPTION_FLAG);
     r->exception_code = exception_code;
-    nx_modbus_rtu_set_crc((uint8_t *)r, sizeof(*r));
 
-    bool queued = (nx_ref_msg_publish(msg, response_queue) == NX_REF_MSG_OK);
-    nx_ref_msg_release(msg);          /* drop the producer reference either way */
-
-    return queued;
+    return reply_send(msg, response_queue, sizeof(*r));
 }

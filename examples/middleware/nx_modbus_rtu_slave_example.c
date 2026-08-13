@@ -18,13 +18,14 @@
  * different address ranges: each subscribes to the ranges it owns and receives
  * matching requests as data on its own queue.
  *
- * Six requests are fed in to exercise every path:
+ * Seven requests are fed in to exercise every path:
  *   1. read holding regs @0x0000 x2   -> valve
  *   2. read input regs   @0x8000 x4   -> sys
  *   3. write single reg  @0x0001, addressed to broadcast (0) -> dropped, silent
  *   4. read coils        @0x0000 x8   -> no subscriber for func 0x01 -> exc 0x01
  *   5. read holding regs @0x0020 x1   -> func owned, addr out of range -> exc 0x02
  *   6. write single reg  @0x0002 = 4000 -> well-formed, valve rejects it -> exc 0x03
+ *   7. write single reg  @0x0002 = 60   -> accepted -> write confirmation echoed
  *
  * All storage is static; the example self-checks with asserts and prints the wire.
  */
@@ -103,9 +104,9 @@ static size_t build_fixed_req(uint8_t *buf, uint8_t addr, uint8_t cmd,
 /* ------------------------------------------------------------------ */
 /* Each module only ever gets requests for the ranges it subscribed to, and the slave
  * has already settled structural legality, so it can trust func/addr/quantity and
- * focus on meaning. Reads get a data response built here; a write whose value is not
- * operationally acceptable gets an exception via nx_modbus_rtu_slave_reply_exception,
- * which needs only the pool and the response queue - no slave handle. */
+ * focus on meaning. All three answers go out through the reply_* helpers, which need
+ * only the pool and the response queue - no slave handle. Their return value names the
+ * reason a reply was not queued, which is what a real module would log. */
 static void business_serve(const char *name, nx_queue_t *inbox,
                            nx_queue_t *response_queue, nx_tiered_mem_pool_t *pool)
 {
@@ -119,38 +120,40 @@ static void business_serve(const char *name, nx_queue_t *inbox,
         uint16_t qty   = (uint16_t)((q->qty_h  << 8) | q->qty_l);
         printf("  [%s] request func=0x%02X start=0x%04X qty=%u\n", name, cmd, start, qty);
 
+        nx_modbus_rtu_slave_ret_t ret;
+
         if (cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
             /* Semantic range check: a valve position is a percentage. The frame is
              * well-formed either way - only this module knows 4000 is meaningless. */
             if (qty > 100u) {
                 printf("  [%s] value %u out of range -> exception 0x%02X\n",
                        name, qty, NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
-                (void)nx_modbus_rtu_slave_reply_exception(pool, response_queue,
+                ret = nx_modbus_rtu_slave_reply_exception(pool, response_queue,
                                                           (const nx_modbus_rtu_header_t *)q,
                                                           NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
+            } else {
+                /* Accepted: the write confirmation is the request echoed back. */
+                ret = nx_modbus_rtu_slave_reply_write(pool, response_queue, q);
             }
-            nx_ref_msg_release(req);
-            continue;
+        } else {
+            /* A read: gather the values (dummy here - each register echoes its address)
+             * and hand them over; the helper wraps them in a response frame. */
+            uint8_t data[32];
+            assert(qty * 2u <= sizeof(data));
+            for (uint16_t i = 0; i < qty; i++) {
+                uint16_t val = (uint16_t)(start + i);
+                data[i * 2]     = (uint8_t)(val >> 8);
+                data[i * 2 + 1] = (uint8_t)(val & 0xFFu);
+            }
+            ret = nx_modbus_rtu_slave_reply_read(pool, response_queue,
+                                                 (const nx_modbus_rtu_header_t *)q,
+                                                 data, (size_t)qty * 2u);
         }
 
-        /* Build a read response: addr, cmd, byte_count, data[qty*2], crc. */
-        uint8_t  byte_count = (uint8_t)(qty * 2u);
-        size_t   rsp_len    = 3u + byte_count + 2u;   /* header(3) + data + crc(2) */
-        nx_ref_msg_t *rsp   = nx_ref_msg_alloc(pool, rsp_len);
-        assert(rsp != NULL);
-        nx_modbus_rtu_rsp_var_t *r = (nx_modbus_rtu_rsp_var_t *)nx_ref_msg_data(rsp);
-        r->addr       = SLAVE_ADDR;
-        r->cmd        = cmd;
-        r->byte_count = byte_count;
-        for (uint16_t i = 0; i < qty; i++) {
-            uint16_t val = (uint16_t)(start + i);      /* dummy: echo the address */
-            r->payload[i * 2]     = (uint8_t)(val >> 8);
-            r->payload[i * 2 + 1] = (uint8_t)(val & 0xFFu);
-        }
-        nx_modbus_rtu_set_crc((uint8_t *)r, rsp_len);
-
-        nx_ref_msg_publish(rsp, response_queue);
-        nx_ref_msg_release(rsp);      /* producer done; response_queue holds the reference */
+        /* A real module would log the resource shortages (NOMEM / FULL) here; every
+         * reply in this example is expected to make it onto the queue. */
+        assert(ret == NX_MODBUS_RTU_SLAVE_OK);
+        (void)ret;
 
         nx_ref_msg_release(req);      /* done with the request */
     }
@@ -172,6 +175,14 @@ static void print_tx(void)
             len = 5u;                        /* addr,cmd,exc,crc,crc */
             printf("  frame %d: EXCEPTION func=0x%02X code=0x%02X\n",
                    ++n, (unsigned)(cmd & 0x7Fu), f[2]);
+        } else if (cmd == NX_MODBUS_FC_WRITE_SINGLE_COIL ||
+                   cmd == NX_MODBUS_FC_WRITE_SINGLE_REG ||
+                   cmd == NX_MODBUS_FC_WRITE_MULTIPLE_COILS ||
+                   cmd == NX_MODBUS_FC_WRITE_MULTIPLE_REGS) {
+            len = 8u;                        /* write confirmation: echoes the request */
+            printf("  frame %d: WRITE OK  func=0x%02X addr=0x%04X value=%u\n",
+                   ++n, cmd, (unsigned)((f[2] << 8) | f[3]),
+                   (unsigned)((f[4] << 8) | f[5]));
         } else {
             len = 3u + f[2] + 2u;            /* read response: header + data + crc */
             printf("  frame %d: RESPONSE func=0x%02X byte_count=%u\n",
@@ -258,7 +269,7 @@ int nx_modbus_rtu_slave_example_run(void)
         return 1;
     }
 
-    /* ---- scripted master traffic: 6 back-to-back requests ---- */
+    /* ---- scripted master traffic: 7 back-to-back requests ---- */
     uint8_t stream[64];
     size_t  sn = 0;
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 2);
@@ -272,6 +283,7 @@ int nx_modbus_rtu_slave_example_run(void)
     /* Structurally fine (any 16-bit value is legal for func 0x06), so the slave
      * dispatches it; only the valve module knows 4000 is not a valid position. */
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0002, 4000);
+    sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0002, 60);
     g_io.rx     = stream;
     g_io.rx_len = sn;
 
@@ -308,6 +320,7 @@ int nx_modbus_rtu_slave_example_run(void)
         { NX_MODBUS_FC_READ_HOLDING_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR,  5 },
         { NX_MODBUS_FC_READ_HOLDING_REGS,                               4 /* byte_count */,              3 + 4 + 2 },
         { NX_MODBUS_FC_WRITE_SINGLE_REG  | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_DATA_VALUE, 5 },
+        { NX_MODBUS_FC_WRITE_SINGLE_REG,                                0x00 /* addr_h */,               8 },
         { NX_MODBUS_FC_READ_INPUT_REGS,                                 8 /* byte_count */,              3 + 8 + 2 },
     };
     size_t off = 0;
@@ -320,7 +333,14 @@ int nx_modbus_rtu_slave_example_run(void)
         off += expect[k].len;
     }
     assert(off == g_io.tx_len);   /* nothing extra, nothing missing */
-    printf("  OK: 3 exceptions + 2 data responses, in order, every CRC valid\n");
+    printf("  OK: 3 exceptions + 2 data responses + 1 write confirmation,\n"
+           "      in order, every CRC valid\n");
+    /* The write confirmation must echo the accepted request byte for byte: same data
+     * address (0x0002) and the same value (60) the master asked to write. */
+    const uint8_t *wr = g_io.tx + 5u + 5u + (3u + 4u + 2u) + 5u;   /* frame 5 */
+    assert(((wr[2] << 8) | wr[3]) == 0x0002);
+    assert(((wr[4] << 8) | wr[5]) == 60);
+    printf("  OK: the write confirmation echoes addr=0x0002 value=60\n");
     /* The broadcast frame produced none of the above: had it been accepted it would
      * have reached the valve queue, and had it been mistaken for unicast it would
      * have drawn a response. The exact-length match above proves neither happened. */

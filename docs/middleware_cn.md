@@ -117,9 +117,13 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
   为 NULL 时跳过间隔。串口回调（`read` / `write` / `is_busy`）共用 `io_ctx`，当驱动是
   模块自有的单一实例时可保持 NULL；`dir_tx` 用独立的 `dir_ctx`（DE 引脚常是另一个 GPIO），
   `get_us` 作为系统级时间源不带任何 ctx。
-- **面向业务模块的异常应答** —— `nx_modbus_rtu_slave_reply_exception()` 按请求帧里的
-  地址与功能码构造一条异常响应并压入响应队列。它只要池和响应队列，业务模块无需持有从站
-  句柄；广播请求不构造帧，返回 false。
+- **面向业务模块的应答辅助函数** —— 三个构造函数覆盖业务模块能给出的全部答复：
+  `nx_modbus_rtu_slave_reply_read()` 把收集到的数据包上字节数，
+  `nx_modbus_rtu_slave_reply_write()` 构造回显请求的写确认，
+  `nx_modbus_rtu_slave_reply_exception()` 上报一个异常码。它们都只要池和响应队列，业务模块
+  无需持有从站句柄；应答的地址与功能码取自请求帧。三者都返回 `nx_modbus_rtu_slave_ret_t`，
+  指明应答未能入队的原因 —— `ERR_NOMEM` 与 `ERR_FULL` 是值得打日志的资源短缺，
+  `ERR_BROADCAST` 是广播请求的正常结果，`ERR_PARAM` 则是调用方的 bug。
 - **自身不做任何分配** —— 接收成帧缓冲、每条消息背后的分层内存池、共享的响应队列全部由
   调用方持有。内存耗尽时优雅降级：响应被丢弃，主站超时即可。
 
