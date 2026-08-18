@@ -23,7 +23,7 @@ Every component follows the same design philosophy:
 nx-c-util/
 ├── src/
 │   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log)
-│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, can_bus, future: can_isotp)
+│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, can_bus, tp_sdu, can_isotp)
 │   ├── algo/         # Algorithms (crc, sha256)
 │   └── device/       # Platform-independent device drivers (ws2812)
 └── examples/
@@ -57,6 +57,8 @@ See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and 
 - [nx_can_bus](docs/middleware_en.md#nx_can_bus--can--can-fd-frame-structures-and-helpers) — CAN / CAN FD frame structures and helpers
 - [nx_modbus_rtu](docs/middleware_en.md#nx_modbus_rtu--modbus-rtu-frame-structures-and-crc) — Modbus RTU frame structures and CRC
 - [nx_modbus_rtu_slave](docs/middleware_en.md#nx_modbus_rtu_slave--event-driven-rtu-slave-frame--subscription-dispatch) — event-driven RTU slave: frame → subscription dispatch
+- [nx_tp_sdu](docs/middleware_en.md#nx_tp_sdu--transport-layer-service-data-unit) — transport-layer service data unit
+- [nx_can_isotp](docs/middleware_en.md#nx_can_isotp--iso-15765-2-docan--iso-tp-segmented-transport) — ISO 15765-2 (DoCAN / ISO-TP) segmented transport
 
 See [Middleware Modules Documentation](docs/middleware_en.md) for detailed descriptions and examples.
 
@@ -99,7 +101,7 @@ Then run the produced executables:
 
   ```sh
   ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer, coro)
-  ./build/nx_middleware_examples  # Middleware modules (modbus_rtu_slave)
+  ./build/nx_middleware_examples  # Middleware modules (modbus_rtu_slave, can_isotp)
   ./build/nx_algo_examples        # Algorithm modules (crc, sha256)
   ./build/nx_device_examples      # Device drivers (ws2812)
   ```

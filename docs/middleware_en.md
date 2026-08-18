@@ -195,3 +195,228 @@ for (;;) {
 
 
 
+### nx_tp_sdu — transport-layer service data unit
+
+A structs-only header describing the object a diagnostic transport exchanges with
+the layer above it: a complete message, plus the few facts about how it travelled
+that the layer above needs in order to answer correctly. Those facts do not depend
+on what carried the message, so they are described once here and every transport
+fills the same structure.
+
+- **One allocation per message** — the payload is the flexible-array part, so the
+  header and the bytes it describes sit in a single pooled block and travel by
+  pointer through the caller's queues.
+- **Addressing** — `ta_type` records whether a message was addressed to a single
+  receiver or to every receiver at once (see `nx_tp_ta_type_t`), which is what
+  decides whether an answer is expected at all.
+- **Connection tag** — `link` numbers the connection a message belongs to, as the
+  application chooses to number them. A transport copies its configured value into
+  everything it publishes and never interprets it, so one upper layer can serve
+  several transports through a single queue and still tell them apart.
+- **What it reports** — `kind` separates the two things that share an outbound
+  queue: a message that arrived, and the outcome of a message that was sent (see
+  `nx_tp_sdu_kind_t`).
+- **Outcome** — `result` names how an operation ended (see `nx_tp_result_t`):
+  completed, one of the timeouts, a sequence-number or flow-control error, a peer
+  that asked to wait more times than are tolerated, or a message that did not fit
+  the space available to receive it. The enumerators are listed in the priority
+  order they are resolved in, so values may be compared.
+- **32-bit length** — `len` counts payload bytes. How long a message may be is
+  bounded by the configuration and the memory behind it, never by the width of
+  this field.
+- **Types only, no dependencies** — nothing to compile and nothing to link. A
+  zero-initialized instance describes a physically addressed indication that
+  succeeded, so only the fields that depart from that need setting.
+
+```c
+#include "nx_tp_sdu.h"
+
+/* a request handed to a transport: it sends len bytes taken from data */
+nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, sizeof(nx_tp_sdu_t) + 2u);
+nx_tp_sdu_t  *s = (nx_tp_sdu_t *)nx_ref_msg_data(m);
+s->len     = 2u;
+s->data[0] = 0x22u;
+s->data[1] = 0xF1u;
+
+/* coming back the other way, one field decides how to read the rest */
+const nx_tp_sdu_t *in = (const nx_tp_sdu_t *)nx_ref_msg_data(msg);
+if (in->kind == NX_TP_SDU_INDICATION) {
+    handle(in->link, in->ta_type, in->data, in->len);   /* a message arrived */
+} else if (in->result != NX_TP_N_OK) {
+    report(in->link, in->result);                       /* a send ended badly */
+}
+```
+
+> **Note:** direction is not a field. Which way a message is going follows from the
+> queue it travels on — a transport reads send requests from one queue and
+> publishes what it received and what it finished sending to another — so `kind`
+> is what tells an arrived message apart from a send that has ended, and `result`
+> carries an outcome only on the latter.
+
+
+### nx_can_isotp — ISO 15765-2 (DoCAN / ISO-TP) segmented transport
+
+A queue-to-queue transport layer that carries messages larger than a single CAN
+frame. It drains a queue of received frames, reassembles complete messages and
+hands them to an upper layer; it takes the upper layer's messages, segments them
+back into frames and paces them onto the CAN transmit queue. The module owns no
+bus and touches no hardware — every artifact in and out is an `nx_ref_msg`
+exchanged over caller-provided queues, and `nx_can_isotp_process()` is the only
+thing that moves them.
+
+- **Both roles from one instance** — configure the ID pair and let the upper
+  layer answer, and it serves as an ECU under diagnostics; call
+  `nx_can_isotp_send()` with a request, and it acts as a tester issuing them. The
+  same instance does both at once.
+- **Full protocol data units** — single frames (with the 2016 length escape for
+  payloads above 7 bytes), first frames with a 12-bit length and a 32-bit escape
+  above 4095, consecutive frames with 4-bit sequence numbers that wrap 0..15, and
+  flow control carrying `CTS` / `WAIT` / `OVERFLOW`, a block size and an `STmin`.
+- **Addressing as a pair** — `phys_rx_id` is what the instance accepts and
+  `phys_tx_id` is what it answers under, including the flow control it emits
+  while receiving a segmented message. An optional `func_rx_id` adds functional
+  (1:N) reception, single-frame only because a shared request ID cannot carry
+  per-receiver flow control; a received message reports in `ta_type` whether it
+  was addressed to one receiver or to many, so the upper layer can tell them
+  apart. IDs are concrete frame values, never bit fields, so one instance is
+  valid for a UDS `0x18DA..xx` pair, a vendor scheme, or plain 11-bit IDs.
+- **Configurable timing** — `n_as_us` bounds how long a frame may wait to be
+  handed to the link while transmitting and `n_ar_us` the same while receiving,
+  `n_bs_us` bounds the wait for a peer's flow control while transmitting,
+  `n_cr_us` the wait for its next consecutive frame while receiving, and
+  `n_wft_max` how many consecutive `WAIT` frames a peer may use to hold the
+  sender before the transmission is abandoned. Each `WAIT` buys a fresh
+  `n_bs_us` window. A zero field takes the documented default.
+- **A busy link costs only the wait** — a frame is handed to the link by
+  publishing it to `can_tx_queue`, so a queue with no room is what "the link
+  would not take it" means. Such a frame is offered again on later
+  `nx_can_isotp_process()` calls, since a transmit queue that briefly fills up
+  normally drains within milliseconds; only once `n_as_us` or `n_ar_us` has
+  passed does the conversation end and report `N_TIMEOUT_A`, naming the local
+  link rather than a peer that has gone quiet. The instant a frame truly leaves
+  the bus is the driver's to observe, so these two are measured from the moment
+  the frame was offered to the queue, which runs a little ahead of the
+  transmission itself and therefore expires a little late rather than early. The
+  overflow flow control frame that refuses a message is the exception: the
+  reception is over either way, so that frame is offered once and not held.
+- **Flow control on your terms** — `rx_block_size` and `rx_stmin` are what this
+  instance advertises while receiving, so a peer is told to pause every N frames
+  and to keep a minimum separation; the module issues a fresh flow control frame
+  as each block runs out.
+- **Bounded reception** — `rx_max_len` is the longest message the instance
+  accepts. A first frame announcing more is answered with an overflow flow
+  control frame before anything is taken from the pool, so what arrives is
+  governed by the configuration rather than by how full the pool happens to be.
+  Leaving it 0 accepts whatever the pool can hold at the moment the first frame
+  lands, still under the module's own ceiling.
+- **One ceiling above every configuration** — `NX_CAN_ISOTP_MAX_MSG_LEN` is the
+  longest message the module handles: what a length can say on the wire, less
+  what one pooled block spends on its headers — 4294967255 bytes wherever
+  `size_t` is at least 32 bits wide. `nx_can_isotp_send()` refuses a longer
+  request with `NX_CAN_ISOTP_ERR_LENGTH`, and a first frame announcing more is
+  answered with an overflow flow control frame before anything is allocated, so
+  a length taken off the bus can never be reassembled into a block too small to
+  hold it. What a given instance actually accepts is smaller still: whatever its
+  pool and `rx_max_len` allow.
+- **A message type that outlives CAN** — what crosses the upper boundary is an
+  `nx_tp_sdu_t`: the payload plus how it was addressed, which connection it
+  belongs to (`link`, copied from the configuration so one upper layer can serve
+  several instances from one queue), what it reports (`kind`) and how it turned
+  out (`result`). The length is a 32-bit count.
+- **Outcome reporting** — with `confirm_tx` set, a transmission that ends and a
+  reception that fails each publish an SDU naming the reason: a timeout waiting
+  for flow control or a consecutive frame, a sequence number out of order, a flow
+  status that is not defined, a peer that asked to wait too many times, or a
+  message too long to receive. `kind` separates these from messages that arrived.
+- **Frame padding** — with `pad_frames` set, every emitted frame is raised to
+  eight data bytes and the unused tail is filled with `pad_byte`, as the
+  diagnostic networks that expect a fixed frame length require. Left clear, each
+  frame carries exactly the bytes it holds.
+- **Paced, bounded transmission** — `tx_frames_per_process` caps how many frames
+  leave per `process()` call, and `STmin` from the peer's flow control spaces
+  consecutive frames against the injected clock.
+- **Zero-copy reassembly** — one message-sized block is taken from the pool when
+  the first frame arrives and the message is reassembled straight into it, so a
+  finished message is handed up without a copy.
+
+```c
+static uint8_t pool_mem[8192];
+static nx_tiered_mem_pool_t pool;
+static nx_ref_msg_t *sdu_tx_buf[8], *sdu_rx_buf[4], *can_rx_buf[16], *can_tx_buf[16];
+static nx_queue_t sdu_tx_q, sdu_rx_q, can_rx_q, can_tx_q;
+static nx_can_isotp_t iso;
+
+const nx_tiered_level_cfg_t tiers[] = {
+    {sizeof(nx_ref_msg_t) + sizeof(nx_can_msg_t) + 8u,       32},  /* CAN frames */
+    {sizeof(nx_ref_msg_t) + sizeof(nx_can_isotp_sdu_t) + 4096u, 4},/* messages */
+};
+const nx_tiered_mem_pool_cfg_t pool_cfg = {
+    .memory = pool_mem, .memory_size = sizeof(pool_mem),
+    .tiers = tiers, .tier_count = 2,
+};
+nx_tiered_mem_pool_init(&pool, &pool_cfg, NULL);
+nx_ref_msg_queue_init(&sdu_tx_q, sdu_tx_buf, 8);
+nx_ref_msg_queue_init(&sdu_rx_q, sdu_rx_buf, 4);
+nx_ref_msg_queue_init(&can_rx_q, can_rx_buf, 16);
+nx_ref_msg_queue_init(&can_tx_q, can_tx_buf, 16);
+
+const nx_can_isotp_cfg_t cfg = {
+    .max_frame_len = NX_CAN_ISOTP_FRAME_8,  /* 8 = classic CAN, 64 = CAN FD */
+    .pad_frames    = true,                  /* fill every frame out to 8 bytes */
+    .pad_byte      = 0xCCu,                 /* what goes in the unused tail */
+    .phys_rx_id    = 0x7E0u,                /* received physically addressed */
+    .phys_tx_id    = 0x7E8u,                /* transmitted, and flow control */
+    .func_rx_id    = 0x7DFu,                /* 1:N requests; 0 disables */
+    .pool          = &pool,
+    .sdu_rx_queue  = &sdu_rx_q,             /* upper -> module: to send */
+    .sdu_tx_queue  = &sdu_tx_q,             /* module -> upper: received */
+    .can_rx_queue  = &can_rx_q,             /* driver -> module: frames */
+    .can_tx_queue  = &can_tx_q,             /* module -> driver: frames */
+    .link          = 1u,                    /* stamped into every published SDU */
+    .confirm_tx    = true,                  /* report how each send ended */
+    .get_us        = board_micros,
+    .n_as_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_ar_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_bs_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_cr_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_wft_max     = 4u,                    /* 0 = 4 */
+    .rx_max_len    = 4096u,                 /* longer is refused with OVERFLOW */
+    .rx_block_size = 8u,                    /* 0 = whole message at once */
+    .rx_stmin      = 0x0Au,                 /* 10 ms between the peer's frames */
+    .tx_frames_per_process = 1u,            /* 0 = emit all flow control allows */
+};
+nx_can_isotp_init(&iso, &cfg);
+
+for (;;) {
+    can_driver_fill(&can_rx_q);   /* driver pushes received frames as nx_ref_msg */
+    nx_can_isotp_process(&iso);   /* reassemble, flow control, segment, pace */
+    can_driver_drain(&can_tx_q);  /* driver pops frames and transmits them */
+
+    nx_ref_msg_t *m;                          /* drain what the module published */
+    while (nx_queue_pop(&sdu_tx_q, &m) == NX_QUEUE_OK) {
+        const nx_can_isotp_sdu_t *sdu = nx_ref_msg_data(m);
+        if (sdu->kind == NX_TP_SDU_INDICATION && sdu->result == NX_TP_N_OK) {
+            uds_handle(&iso, sdu->ta_type, sdu->data, sdu->len);
+        } else {
+            uds_report(&iso, sdu->kind, sdu->result);   /* a send ended, or a receive failed */
+        }
+        nx_ref_msg_release(m);                /* consumer releases its reference */
+    }
+}
+```
+
+> **Note:** every queue is named from the module's point of view — it reads
+> `sdu_rx_queue` and `can_rx_queue`, and writes `sdu_tx_queue` and
+> `can_tx_queue`. So the queue the upper layer reads its messages from is the
+> module's *transmit* queue, and the one it pushes send requests to is the
+> module's *receive* queue.
+>
+> `process()` consumes every frame it finds on `can_rx_queue`, releasing the ones
+> whose ID matches neither receive ID. Two instances may therefore share one
+> `can_rx_queue` only if their ID sets are disjoint — whichever instance runs
+> first takes the frame, matched or not. Give each instance its own receive
+> queue, or filter in the driver, when that is not certain. Anything popped from
+> `sdu_tx_queue` is a reference the consumer owns and must `nx_ref_msg_release()`
+> once handled; forgetting to is a pool leak, not a use-after-free, because the
+> block is only returned when the count reaches zero. Frames pushed to
+> `can_tx_queue` are likewise the driver's to release after transmitting.

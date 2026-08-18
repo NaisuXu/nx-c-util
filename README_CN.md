@@ -20,7 +20,7 @@
 nx-c-util/
 ├── src/
 │   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log）
-│   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, modbus_rtu_slave, can_bus，未来：can_isotp）
+│   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, modbus_rtu_slave, can_bus, tp_sdu, can_isotp）
 │   ├── algo/         # 算法（crc, sha256）
 │   └── device/       # 平台无关的设备驱动（ws2812）
 └── examples/
@@ -53,6 +53,8 @@ nx-c-util/
 - [nx_can_bus](docs/middleware_cn.md#nx_can_bus--can--can-fd-帧结构与辅助函数) — CAN / CAN FD 帧结构与辅助函数
 - [nx_modbus_rtu](docs/middleware_cn.md#nx_modbus_rtu--modbus-rtu-帧结构与-crc) — Modbus RTU 帧结构与 CRC
 - [nx_modbus_rtu_slave](docs/middleware_cn.md#nx_modbus_rtu_slave--事件驱动的-rtu-从站帧--订阅分发) — 事件驱动的 RTU 从站：帧 → 订阅分发
+- [nx_tp_sdu](docs/middleware_cn.md#nx_tp_sdu--传输层服务数据单元) — 传输层服务数据单元
+- [nx_can_isotp](docs/middleware_cn.md#nx_can_isotp--iso-15765-2docan--iso-tp分段传输) — ISO 15765-2（DoCAN / ISO-TP）分段传输
 
 详细说明和示例请参阅[中间件模块文档](docs/middleware_cn.md)。
 
@@ -93,7 +95,7 @@ cmake --build build
 
   ```sh
   ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer, coro）
-  ./build/nx_middleware_examples  # 中间件模块（modbus_rtu_slave）
+  ./build/nx_middleware_examples  # 中间件模块（modbus_rtu_slave, can_isotp）
   ./build/nx_algo_examples        # 算法模块（crc, sha256）
   ./build/nx_device_examples      # 设备驱动（ws2812）
   ```

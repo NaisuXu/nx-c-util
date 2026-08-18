@@ -164,3 +164,184 @@ for (;;) {
 > 会被分发，但从不应答 —— 不回响应，也不回异常。
 
 
+### nx_tp_sdu —— 传输层服务数据单元
+
+一个仅结构体的头文件，描述诊断传输层与上层之间交换的对象：一条完整的报文，加上上层
+为了正确作答而必须知道的、关于它如何传过来的少量事实。这些事实与是谁承载了报文无关，
+因此在这里描述一次，每个传输层都填写同一个结构体。
+
+- **一条报文一次分配** —— 载荷是柔性数组成员，因此头部与它所描述的字节共处一个内存池
+  块中，在调用者提供的队列之间按指针传递。
+- **寻址方式** —— `ta_type` 记录报文是发给单个接收者还是发给所有接收者（见
+  `nx_tp_ta_type_t`），这决定了到底该不该作答。
+- **连接标记** —— `link` 标明报文属于哪条连接，编号方式由应用自己决定。传输层只把
+  配置中的值拷贝进每一条推出的报文，从不解释它，因此一个上层可以用一个队列服务多个
+  传输层实例，仍能把它们区分开。
+- **它在报告什么** —— `kind` 区分共用同一个输出队列的两类东西：收到的报文，以及一次
+  发送的结果（见 `nx_tp_sdu_kind_t`）。
+- **结果** —— `result` 说明一次操作是怎么结束的（见 `nx_tp_result_t`）：正常完成、某一类
+  超时、序号或流控错误、对端要求等待的次数超出容忍范围，或报文装不下可用于接收它的
+  空间。枚举值按它们被结算的优先级顺序排列，因此可以直接比较大小。
+- **32 位长度** —— `len` 以字节计算载荷。报文能有多长取决于配置及其背后的内存，
+  而不取决于这个字段的宽度。
+- **只有类型、无依赖** —— 无需编译、无需链接。一个零初始化的实例表示一条成功的、
+  物理寻址的接收指示，因此只需填写与此不同的字段。
+
+```c
+#include "nx_tp_sdu.h"
+
+/* a request handed to a transport: it sends len bytes taken from data */
+nx_ref_msg_t *m = nx_ref_msg_alloc(&pool, sizeof(nx_tp_sdu_t) + 2u);
+nx_tp_sdu_t  *s = (nx_tp_sdu_t *)nx_ref_msg_data(m);
+s->len     = 2u;
+s->data[0] = 0x22u;
+s->data[1] = 0xF1u;
+
+/* coming back the other way, one field decides how to read the rest */
+const nx_tp_sdu_t *in = (const nx_tp_sdu_t *)nx_ref_msg_data(msg);
+if (in->kind == NX_TP_SDU_INDICATION) {
+    handle(in->link, in->ta_type, in->data, in->len);   /* a message arrived */
+} else if (in->result != NX_TP_N_OK) {
+    report(in->link, in->result);                       /* a send ended badly */
+}
+```
+
+> **注意：** 方向不是一个字段。报文往哪个方向走，由它所在的队列决定 —— 传输层从一个
+> 队列读取发送请求，把收到的报文和发完的结果推到另一个队列。因此区分"收到一条报文"
+> 与"一次发送结束了"的是 `kind`，而 `result` 只在后者上才携带结果。
+
+
+### nx_can_isotp —— ISO 15765-2（DoCAN / ISO-TP）分段传输
+
+一个队列到队列的传输层，负责承载超出单帧容量的报文。它从接收队列中取走收到的帧，重组出
+完整报文后交给上层；也接收上层的报文，将其分段回若干帧并按节奏送入 CAN 发送队列。模块
+不拥有总线、不接触硬件 —— 进出的每个对象都是通过调用者提供的队列传递的 `nx_ref_msg`，
+而搬运它们的只有 `nx_can_isotp_process()`。
+
+- **一个实例兼具两种角色** —— 配置好 ID 组合并由上层作答，它就是被诊断的 ECU；调用
+  `nx_can_isotp_send()` 发出请求，它就是发起诊断的上位机。同一个实例可同时担任两者。
+- **完整的协议数据单元** —— 单帧（含 2016 版对超过 7 字节载荷的长度转义）、带 12 位
+  长度的首帧（超过 4095 时使用 32 位转义）、带 4 位序号（0..15 回绕）的连续帧，以及
+  携带 `CTS` / `WAIT` / `OVERFLOW`、块大小与 `STmin` 的流控帧。
+- **成对配置的寻址** —— `phys_rx_id` 是本实例接收的 ID，`phys_tx_id` 是它发出报文所用
+  的 ID，接收分段报文期间发出的流控帧也走这个 ID。可选的 `func_rx_id` 增加功能寻址
+  （1:N）接收，且只接受单帧 —— 共用的请求 ID 无法承载面向单个接收者的流控。收到的报文
+  会在 `ta_type` 中标明它是发给单个接收者还是发给所有人，上层据此区分两者。这里填的是
+  具体的帧 ID 而非位域，因此一个实例适用于 UDS 的 `0x18DA..xx` 组合、厂商自定义方案，
+  或普通的 11 位 ID。
+- **可配置的时间参数** —— `n_as_us` 限定发送时一帧等待交给链路的时长，`n_ar_us` 限定
+  接收时的同一件事，`n_bs_us` 限定发送时等待对端流控的时长，`n_cr_us` 限定接收时
+  等待对端下一个连续帧的时长，`n_wft_max` 限定对端最多可用多少个连续的 `WAIT` 帧把发送
+  方拖住，超出则放弃本次发送。每个 `WAIT` 都会重新给出一个完整的 `n_bs_us` 窗口。字段
+  填 0 表示采用文档给出的默认值。
+- **链路一时繁忙只花等待的时间** —— 帧是通过投递到 `can_tx_queue` 交给链路的，因此队
+  列没有空位就是这里所说的"链路收不下这一帧"。这样的帧会在后续的
+  `nx_can_isotp_process()` 中被再次投递 —— 发送队列偶尔塞满，正常情况下几毫秒内就会
+  排空；只有超过 `n_as_us` 或 `n_ar_us`，本次会话才结束并报出 `N_TIMEOUT_A`，指明是本
+  地链路的问题，而不是对端不说话了。帧真正离开总线的时刻只有驱动才观测得到，所以这两个
+  参数从帧被投递进队列的那一刻起算，比实际发送略早一点，因而只会稍晚判定超时，不会提前
+  误判。拒收报文用的溢出流控帧是个例外：这次接收无论如何都已经结束，所以那一帧只投递一
+  次，不做保留。
+- **由你决定的流控** —— `rx_block_size` 与 `rx_stmin` 是本实例接收时对外通告的参数，
+  用来要求对端每发 N 帧暂停一次、并保持最小帧间隔；每当一个块发完，模块会补发一个新的
+  流控帧。
+- **有上限的接收** —— `rx_max_len` 是本实例能接收的最大报文长度。首帧声明的长度超过它
+  时，模块在从内存池中取走任何空间之前就回一个溢出流控帧，因此能收多长由配置决定，而不
+  取决于池子当时剩多少。填 0 表示首帧到达时池子能分配多大就收多大，但仍不超过模块
+  自身的上限。
+- **高于任何配置的硬上限** —— `NX_CAN_ISOTP_MAX_MSG_LEN` 是本模块能处理的最长报文：
+  线上的长度字段能表达的值，减去一个内存池块用在头部上的字节 —— 只要 `size_t` 有 32
+  位宽，它就是 4294967255 字节。`nx_can_isotp_send()` 对更长的请求返回
+  `NX_CAN_ISOTP_ERR_LENGTH`，首帧声明超过它则在任何分配发生之前就回一个溢出流控帧，
+  因此从总线上读到的长度绝不会被重组进一块装不下它的内存。某个具体实例实际能收多长还
+  要更小：取决于它的内存池和 `rx_max_len`。
+- **不局限于 CAN 的报文类型** —— 跨越上层边界的是 `nx_tp_sdu_t`：载荷，加上它的寻址
+  方式、所属连接（`link`，从配置中拷入，因此一个上层可以用一个队列服务多个实例）、它
+  报告的内容（`kind`）以及结果（`result`）。长度是 32 位计数。
+- **结果上报** —— 置上 `confirm_tx` 后，每次发送结束、以及每次接收失败，都会推出一条
+  SDU 说明原因：等流控或等连续帧超时、序号错乱、未定义的流控状态、对端 WAIT 次数超限，
+  或报文长度超出可接收范围。`kind` 用于把这些与真正收到的报文区分开。
+- **CAN 帧填充** —— 置上 `pad_frames` 后，每个发出的帧都会被补齐到 8 个数据字节，未用
+  的尾部填入 `pad_byte`，以满足要求定长帧的诊断网络。不置上则每帧只携带它实际装下的
+  字节。
+- **有节奏、有边界的发送** —— `tx_frames_per_process` 限制每次 `process()` 调用最多
+  发出多少帧，对端流控中的 `STmin` 则依据注入的时钟为连续帧留出间隔。
+- **零拷贝重组** —— 首帧到达时从内存池中分配一块报文大小的空间并直接在其中重组，因此
+  完成的报文无需拷贝即可交付上层。
+
+```c
+static uint8_t pool_mem[8192];
+static nx_tiered_mem_pool_t pool;
+static nx_ref_msg_t *sdu_tx_buf[8], *sdu_rx_buf[4], *can_rx_buf[16], *can_tx_buf[16];
+static nx_queue_t sdu_tx_q, sdu_rx_q, can_rx_q, can_tx_q;
+static nx_can_isotp_t iso;
+
+const nx_tiered_level_cfg_t tiers[] = {
+    {sizeof(nx_ref_msg_t) + sizeof(nx_can_msg_t) + 8u,       32},  /* CAN 帧 */
+    {sizeof(nx_ref_msg_t) + sizeof(nx_can_isotp_sdu_t) + 4096u, 4},/* 报文 */
+};
+const nx_tiered_mem_pool_cfg_t pool_cfg = {
+    .memory = pool_mem, .memory_size = sizeof(pool_mem),
+    .tiers = tiers, .tier_count = 2,
+};
+nx_tiered_mem_pool_init(&pool, &pool_cfg, NULL);
+nx_ref_msg_queue_init(&sdu_tx_q, sdu_tx_buf, 8);
+nx_ref_msg_queue_init(&sdu_rx_q, sdu_rx_buf, 4);
+nx_ref_msg_queue_init(&can_rx_q, can_rx_buf, 16);
+nx_ref_msg_queue_init(&can_tx_q, can_tx_buf, 16);
+
+const nx_can_isotp_cfg_t cfg = {
+    .max_frame_len = NX_CAN_ISOTP_FRAME_8,  /* 8 = 经典 CAN，64 = CAN FD */
+    .pad_frames    = true,                  /* 每帧补齐到 8 字节 */
+    .pad_byte      = 0xCCu,                 /* 未用尾部填什么 */
+    .phys_rx_id    = 0x7E0u,                /* 接收物理寻址报文的 ID */
+    .phys_tx_id    = 0x7E8u,                /* 发送报文与流控所用的 ID */
+    .func_rx_id    = 0x7DFu,                /* 功能寻址请求；填 0 表示关闭 */
+    .pool          = &pool,
+    .sdu_rx_queue  = &sdu_rx_q,             /* 上层 -> 模块：待发的报文 */
+    .sdu_tx_queue  = &sdu_tx_q,             /* 模块 -> 上层：收到的报文 */
+    .can_rx_queue  = &can_rx_q,             /* 驱动 -> 模块：收到的帧 */
+    .can_tx_queue  = &can_tx_q,             /* 模块 -> 驱动：分段后的帧 */
+    .link          = 1u,                    /* 写入每条推出的 SDU */
+    .confirm_tx    = true,                  /* 上报每次发送的结果 */
+    .get_us        = board_micros,
+    .n_as_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_ar_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_bs_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_cr_us       = 1000000u,              /* 0 = 1000 ms */
+    .n_wft_max     = 4u,                    /* 0 = 4 */
+    .rx_max_len    = 4096u,                 /* 超过则回 OVERFLOW 拒收 */
+    .rx_block_size = 8u,                    /* 0 = 一次收完整条报文 */
+    .rx_stmin      = 0x0Au,                 /* 要求对端帧间隔 10 ms */
+    .tx_frames_per_process = 1u,            /* 0 = 流控允许多少就发多少 */
+};
+nx_can_isotp_init(&iso, &cfg);
+
+for (;;) {
+    can_driver_fill(&can_rx_q);   /* 驱动把收到的帧作为 nx_ref_msg 推入 */
+    nx_can_isotp_process(&iso);   /* 重组、发流控、分段、按节奏发送 */
+    can_driver_drain(&can_tx_q);  /* 驱动取走帧并发送出去 */
+
+    nx_ref_msg_t *m;                          /* 取走模块推出的内容 */
+    while (nx_queue_pop(&sdu_tx_q, &m) == NX_QUEUE_OK) {
+        const nx_can_isotp_sdu_t *sdu = nx_ref_msg_data(m);
+        if (sdu->kind == NX_TP_SDU_INDICATION && sdu->result == NX_TP_N_OK) {
+            uds_handle(&iso, sdu->ta_type, sdu->data, sdu->len);
+        } else {
+            uds_report(&iso, sdu->kind, sdu->result);   /* 发送结束，或接收失败 */
+        }
+        nx_ref_msg_release(m);                /* 消费者释放自己的引用 */
+    }
+}
+```
+
+> **注意：** 所有队列的命名都是站在本模块的角度：模块读 `sdu_rx_queue` 和
+> `can_rx_queue`，写 `sdu_tx_queue` 和 `can_tx_queue`。也就是说，上层用来读取报文的
+> 是模块的**发送**队列，上层用来投递发送请求的是模块的**接收**队列。
+>
+> `process()` 会取走 `can_rx_queue` 上的每一帧，ID 与两个接收 ID 都不匹配的帧被直接
+> 释放。因此只有在两个实例的 ID 集合互不相交时，它们才可以共用一个 `can_rx_queue` ——
+> 先运行的实例会拿走帧，无论是否匹配。若无法保证这一点，就给每个实例各配一个接收队列，
+> 或在驱动层先做过滤。从 `sdu_tx_queue` 取出的每个对象都是消费者持有的一个引用，处理完
+> 必须调用 `nx_ref_msg_release()`；漏掉它造成的是内存池泄漏而非释放后使用，因为只有引用
+> 计数归零时块才会被归还。推入 `can_tx_queue` 的帧同理，由驱动在发送完成后释放。
