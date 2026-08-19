@@ -322,11 +322,6 @@ thing that moves them.
   a length taken off the bus can never be reassembled into a block too small to
   hold it. What a given instance actually accepts is smaller still: whatever its
   pool and `rx_max_len` allow.
-- **A message type that outlives CAN** — what crosses the upper boundary is an
-  `nx_tp_sdu_t`: the payload plus how it was addressed, which connection it
-  belongs to (`link`, copied from the configuration so one upper layer can serve
-  several instances from one queue), what it reports (`kind`) and how it turned
-  out (`result`). The length is a 32-bit count.
 - **Outcome reporting** — with `confirm_tx` set, a transmission that ends and a
   reception that fails each publish an SDU naming the reason: a timeout waiting
   for flow control or a consecutive frame, a sequence number out of order, a flow
@@ -371,6 +366,7 @@ const nx_can_isotp_cfg_t cfg = {
     .phys_rx_id    = 0x7E0u,                /* received physically addressed */
     .phys_tx_id    = 0x7E8u,                /* transmitted, and flow control */
     .func_rx_id    = 0x7DFu,                /* 1:N requests; 0 disables */
+    .func_tx_id    = 0x7DFu,                /* 1:N broadcast; 0 disables */
     .pool          = &pool,
     .sdu_rx_queue  = &sdu_rx_q,             /* upper -> module: to send */
     .sdu_tx_queue  = &sdu_tx_q,             /* module -> upper: received */
