@@ -278,8 +278,12 @@ thing that moves them.
   (1:N) reception, single-frame only because a shared request ID cannot carry
   per-receiver flow control; a received message reports in `ta_type` whether it
   was addressed to one receiver or to many, so the upper layer can tell them
-  apart. IDs are concrete frame values, never bit fields, so one instance is
-  valid for a UDS `0x18DA..xx` pair, a vendor scheme, or plain 11-bit IDs.
+  apart. An optional `func_tx_id` adds functional transmission — pass
+  `NX_TP_TA_FUNCTIONAL` to `nx_can_isotp_send()` to broadcast a request — also
+  single-frame only for the same reason, and off by default because a network has
+  at most one functional sender, so only a tester instance configures it. IDs are
+  concrete frame values, never bit fields, so one instance is valid for a UDS
+  `0x18DA..xx` pair, a vendor scheme, or plain 11-bit IDs.
 - **Configurable timing** — `n_as_us` bounds how long a frame may wait to be
   handed to the link while transmitting and `n_ar_us` the same while receiving,
   `n_bs_us` bounds the wait for a peer's flow control while transmitting,

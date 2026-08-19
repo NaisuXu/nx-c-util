@@ -17,9 +17,11 @@
  * send while receiving a segmented message. An optional @c func_rx_id adds
  * functional (1:N) reception, which is single-frame only, as a shared request ID
  * cannot carry per-receiver flow control; responses to it still go out on
- * @c phys_tx_id. The module never touches the SA/TA layout inside an ID, which
- * keeps one instance valid for any physical assignment (UDS's 0x18DA..xx, a
- * vendor scheme, even an 11-bit ID).
+ * @c phys_tx_id. An optional @c func_tx_id adds functional transmission, also
+ * single-frame only and off by default, since a network has at most one
+ * functional sender. The module never touches the SA/TA layout inside an ID,
+ * which keeps one instance valid for any physical assignment (UDS's
+ * 0x18DA..xx, a vendor scheme, even an 11-bit ID).
  *
  * One instance = one CAN channel. Multiple physical channels each get their own
  * instance. Reception carries one segmented conversation at a time (the physical
@@ -161,6 +163,7 @@ typedef struct {
     uint8_t       sn;        /**< Next consecutive-frame sequence number to send */
     uint8_t       bs;        /**< Frames left in the current flow-control block */
     uint8_t       wft;       /**< Consecutive FC.WAIT frames seen so far */
+    uint8_t       ta_type;   /**< Addressing of the message being sent */
     uint32_t      sent;      /**< Payload bytes already placed into frames */
     uint32_t      total;     /**< Payload length of the message being sent */
     int32_t       stmin_us;  /**< Resolved minimum frame spacing (us); 0 = none */
@@ -168,6 +171,7 @@ typedef struct {
     uint32_t      deadline;  /**< get_us() by which whatever the state is waiting
                               for - the peer's flow control, or room on the link
                               for a frame - must have happened */
+    uint32_t      tx_id;     /**< CAN ID the message is emitted under */
     nx_ref_msg_t *sdu;       /**< Message being sent; NULL when idle */
 } nx_can_isotp_tx_t;
 
@@ -200,6 +204,10 @@ typedef struct {
     uint32_t func_rx_id;      /**< CAN ID for functionally addressed (1:N) reception,
                                single-frame only; 0 disables it. Responses still go
                                out on @c phys_tx_id. */
+    uint32_t func_tx_id;      /**< CAN ID for functionally addressed (1:N) transmission,
+                               single-frame only; 0 disables it. There is at most
+                               one functional sender on a network, so only a tester
+                               instance configures this. */
 
     /* ---- upper-layer interface (queues) ---- */
     nx_tiered_mem_pool_t *pool;     /**< Pool for frames and SDUs */
@@ -274,6 +282,7 @@ typedef struct nx_can_isotp {
  * @param  cfg Configuration, must not be NULL; @c max_frame_len in {8,64};
  *             @c phys_rx_id and @c phys_tx_id required and distinct;
  *             @c func_rx_id, when non-zero, distinct from both;
+ *             @c func_tx_id, when non-zero, distinct from all three others;
  *             @c pool, @c sdu_rx_queue, @c sdu_tx_queue, @c can_rx_queue and
  *             @c can_tx_queue required.
  *
@@ -309,18 +318,25 @@ void nx_can_isotp_process(nx_can_isotp_t *iso);
  *
  * Builds an SDU in the pool and publishes it to @c sdu_rx_queue, exactly as the
  * upper layer would for a direct queue push. The message goes out on
- * @c phys_tx_id when process() reaches it.
+ * @c phys_tx_id when process() reaches it; a @p ta_type of
+ * NX_TP_TA_FUNCTIONAL goes out on @c func_tx_id instead, and must be short
+ * enough for a single frame, since a shared request ID cannot carry per-receiver
+ * flow control.
  *
- * @param  iso    Instance, must not be NULL.
- * @param  data   Payload, must not be NULL.
- * @param  len    Payload length in bytes; must be > 0 and at most
- *                NX_CAN_ISOTP_MAX_MSG_LEN.
+ * @param  iso     Instance, must not be NULL.
+ * @param  data    Payload, must not be NULL.
+ * @param  len     Payload length in bytes; must be > 0 and at most
+ *                 NX_CAN_ISOTP_MAX_MSG_LEN.
+ * @param  ta_type NX_TP_TA_PHYSICAL (default) or NX_TP_TA_FUNCTIONAL.
  *
- * @return NX_CAN_ISOTP_OK if queued; ERR_PARAM on bad arguments;
- *         ERR_LENGTH if @p len exceeds NX_CAN_ISOTP_MAX_MSG_LEN;
- *         ERR_NOMEM if the pool is exhausted; ERR_FULL if @c sdu_rx_queue is full.
+ * @return NX_CAN_ISOTP_OK if queued; ERR_PARAM on bad arguments, on a functional
+ *         request that does not fit one frame, or when @p ta_type is not one of
+ *         the two defined values; ERR_LENGTH if @p len exceeds
+ *         NX_CAN_ISOTP_MAX_MSG_LEN; ERR_NOMEM if the pool is exhausted;
+ *         ERR_FULL if @c sdu_rx_queue is full.
  */
-nx_can_isotp_ret_t nx_can_isotp_send(nx_can_isotp_t *iso, const uint8_t *data, size_t len);
+nx_can_isotp_ret_t nx_can_isotp_send(nx_can_isotp_t *iso, const uint8_t *data,
+                                     size_t len, nx_tp_ta_type_t ta_type);
 
 #ifdef __cplusplus
 }

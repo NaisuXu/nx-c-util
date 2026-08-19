@@ -161,9 +161,9 @@ static bool istp_emit_frame(nx_can_isotp_t *iso, uint32_t id,
  * that (reachable only on 64-byte geometry) the nibble is zero and a second
  * header byte carries the true length.
  */
-static bool istp_emit_sf(nx_can_isotp_t *iso, const uint8_t *src, size_t plen)
+static bool istp_emit_sf(nx_can_isotp_t *iso, uint32_t id, const uint8_t *src,
+                         size_t plen)
 {
-    uint32_t id = iso->cfg.phys_tx_id;
     if (plen <= NX_CAN_ISOTP_SF_DL_4) {
         uint8_t pci = (uint8_t)(NX_CAN_ISOTP_PCI_SF | (uint8_t)plen);
         return istp_emit_frame(iso, id, src, plen, &pci, 1u);
@@ -182,11 +182,11 @@ static size_t istp_sf_capacity(const nx_can_isotp_t *iso)
                : (size_t)iso->cfg.max_frame_len - 2u;
 }
 
-static bool istp_emit_cf(nx_can_isotp_t *iso, const uint8_t *src, size_t plen,
-                         unsigned sn)
+static bool istp_emit_cf(nx_can_isotp_t *iso, uint32_t id, const uint8_t *src,
+                         size_t plen, unsigned sn)
 {
     uint8_t pci = (uint8_t)(NX_CAN_ISOTP_PCI_CF | (uint8_t)(sn & 0x0Fu));
-    return istp_emit_frame(iso, iso->cfg.phys_tx_id, src, plen, &pci, 1u);
+    return istp_emit_frame(iso, id, src, plen, &pci, 1u);
 }
 
 /**
@@ -194,7 +194,7 @@ static bool istp_emit_cf(nx_can_isotp_t *iso, const uint8_t *src, size_t plen,
  *         12-bit bound) 32-bit length field. Puts the first payload chunk into
  *         the frame and reports how many bytes it has carried.
  */
-static size_t istp_emit_ff(nx_can_isotp_t *iso, const uint8_t *src,
+static size_t istp_emit_ff(nx_can_isotp_t *iso, uint32_t id, const uint8_t *src,
                            uint32_t total)
 {
     uint8_t pci[6];
@@ -214,7 +214,7 @@ static size_t istp_emit_ff(nx_can_isotp_t *iso, const uint8_t *src,
         pci[1] = (uint8_t)(total);
         hdr    = 2u;
     }
-    if (!istp_emit_frame(iso, iso->cfg.phys_tx_id, src, total, pci, hdr)) {
+    if (!istp_emit_frame(iso, id, src, total, pci, hdr)) {
         return 0u;
     }
     size_t cap = (size_t)iso->cfg.max_frame_len - hdr;
@@ -661,13 +661,20 @@ static unsigned istp_request_tx(nx_can_isotp_t *iso, unsigned max_frames)
         }
         const nx_can_isotp_sdu_t *s =
             (const nx_can_isotp_sdu_t *)nx_ref_msg_data(tx->sdu);
-        tx->total = s->len;
-        tx->sent  = 0u;
-        tx->sn    = 1u;                /* the FF is SN 0; the first CF is SN 1 */
-        tx->wft   = 0u;
+        tx->total   = s->len;
+        tx->sent    = 0u;
+        tx->sn      = 1u;                /* the FF is SN 0; the first CF is SN 1 */
+        tx->wft     = 0u;
+        tx->ta_type = s->ta_type;
+        /* The addressing picks the ID the whole message goes out under. A
+         * functional message is single-frame by construction, so nothing beyond
+         * this point consults ta_type again. */
+        tx->tx_id = (s->ta_type == NX_TP_TA_FUNCTIONAL)
+                        ? iso->cfg.func_tx_id
+                        : iso->cfg.phys_tx_id;
         if (tx->total <= istp_sf_capacity(iso)) {
             /* Single frame: one SF, done. */
-            if (!istp_emit_sf(iso, s->data, tx->total)) {
+            if (!istp_emit_sf(iso, tx->tx_id, s->data, tx->total)) {
                 istp_tx_hold(iso);     /* offer it again while N_As allows */
                 return 0u;
             }
@@ -675,7 +682,7 @@ static unsigned istp_request_tx(nx_can_isotp_t *iso, unsigned max_frames)
             return 1u;
         }
         /* Multi-frame: FF then wait for flow control. */
-        size_t loaded = istp_emit_ff(iso, s->data, tx->total);
+        size_t loaded = istp_emit_ff(iso, tx->tx_id, s->data, tx->total);
         if (loaded == 0u) {
             istp_tx_hold(iso);
             return 0u;
@@ -692,13 +699,13 @@ static unsigned istp_request_tx(nx_can_isotp_t *iso, unsigned max_frames)
             (const nx_can_isotp_sdu_t *)nx_ref_msg_data(tx->sdu);
         if (tx->sent == 0u) {
             if (tx->total <= istp_sf_capacity(iso)) {
-                if (!istp_emit_sf(iso, s->data, tx->total)) {
+                if (!istp_emit_sf(iso, tx->tx_id, s->data, tx->total)) {
                     return 0u;
                 }
                 istp_tx_abort(iso, NX_TP_N_OK);
                 return 1u;
             }
-            size_t loaded = istp_emit_ff(iso, s->data, tx->total);
+            size_t loaded = istp_emit_ff(iso, tx->tx_id, s->data, tx->total);
             if (loaded == 0u) {
                 return 0u;
             }
@@ -710,7 +717,7 @@ static unsigned istp_request_tx(nx_can_isotp_t *iso, unsigned max_frames)
         if (chunk > (size_t)iso->cfg.max_frame_len - 1u) {
             chunk = (size_t)iso->cfg.max_frame_len - 1u;
         }
-        if (!istp_emit_cf(iso, s->data + tx->sent, chunk, tx->sn)) {
+        if (!istp_emit_cf(iso, tx->tx_id, s->data + tx->sent, chunk, tx->sn)) {
             return 0u;
         }
         tx->sent   += (uint32_t)chunk;
@@ -745,7 +752,7 @@ static unsigned istp_request_tx(nx_can_isotp_t *iso, unsigned max_frames)
         if (chunk > (size_t)iso->cfg.max_frame_len - 1u) {
             chunk = (size_t)iso->cfg.max_frame_len - 1u;
         }
-        if (!istp_emit_cf(iso, s->data + tx->sent, chunk, tx->sn)) {
+        if (!istp_emit_cf(iso, tx->tx_id, s->data + tx->sent, chunk, tx->sn)) {
             istp_tx_hold(iso);   /* offer the same frame again while N_As allows */
             return emitted;
         }
@@ -843,6 +850,12 @@ bool nx_can_isotp_init(nx_can_isotp_t *iso, const nx_can_isotp_cfg_t *cfg)
          cfg->func_rx_id == cfg->phys_tx_id)) {
         return false;
     }
+    if (cfg->func_tx_id != 0u &&
+        (cfg->func_tx_id == cfg->phys_rx_id ||
+         cfg->func_tx_id == cfg->phys_tx_id ||
+         cfg->func_tx_id == cfg->func_rx_id)) {
+        return false;
+    }
     if (cfg->pool == NULL || cfg->sdu_rx_queue == NULL ||
         cfg->sdu_tx_queue == NULL ||
         cfg->can_rx_queue == NULL || cfg->can_tx_queue == NULL) {
@@ -913,10 +926,22 @@ void nx_can_isotp_process(nx_can_isotp_t *iso)
     istp_request_tx(iso, budget);
 }
 
-nx_can_isotp_ret_t nx_can_isotp_send(nx_can_isotp_t *iso, const uint8_t *data, size_t len)
+nx_can_isotp_ret_t nx_can_isotp_send(nx_can_isotp_t *iso, const uint8_t *data,
+                                     size_t len, nx_tp_ta_type_t ta_type)
 {
     if (iso == NULL || data == NULL || len == 0u) {
         return NX_CAN_ISOTP_ERR_PARAM;
+    }
+    if (ta_type == NX_TP_TA_FUNCTIONAL) {
+        /* Functional addressing is 1:N, so there is no flow control to pace a
+         * segmented message: only a single frame can go out, and the ID it uses
+         * must be configured. */
+        if (iso->cfg.func_tx_id == 0u ||
+            len > istp_sf_capacity(iso)) {
+            return NX_CAN_ISOTP_ERR_PARAM;
+        }
+    } else if (ta_type != NX_TP_TA_PHYSICAL) {
+        return NX_CAN_ISOTP_ERR_PARAM;          /* addressing not defined */
     }
     /* Refusing here keeps a request that no allocation can express from being
      * truncated into a message that looks well-formed. */
@@ -930,7 +955,7 @@ nx_can_isotp_ret_t nx_can_isotp_send(nx_can_isotp_t *iso, const uint8_t *data, s
     }
     nx_can_isotp_sdu_t *s = (nx_can_isotp_sdu_t *)nx_ref_msg_data(m);
     istp_sdu_head(iso, s, (uint32_t)len, NX_TP_SDU_INDICATION,
-                  NX_TP_TA_PHYSICAL, NX_TP_N_OK);
+                  (uint8_t)ta_type, NX_TP_N_OK);
     memcpy(s->data, data, len);
     nx_ref_msg_ret_t r = nx_ref_msg_publish(m, iso->cfg.sdu_rx_queue);
     if (r != NX_REF_MSG_OK) {

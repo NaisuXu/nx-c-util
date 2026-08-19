@@ -26,7 +26,7 @@
  * addressing requires: the module receives on PHYS_RX_ID and answers on
  * PHYS_TX_ID - including the flow control it sends while receiving.
  *
- * Eleven scenarios are exercised:
+ * Twelve scenarios are exercised:
  *   1. Receive a single frame                  -> one SDU handed up, no FC
  *   2. Receive a segmented message (FF + CFs)  -> FC on the transmit ID carrying
  *                                                 the configured BS/STmin, and a
@@ -46,6 +46,8 @@
  *      drains                                      the conversation carries on
  *  11. A transmit queue that never drains      -> N_As and N_Ar expire and each
  *                                                 side reports TIMEOUT_A
+ *  12. A functionally addressed send            -> one SF on the functional ID,
+ *                                                 no flow control involved
  *
  * Padding is on throughout, so every emitted frame is a full 8 bytes with 0xCC
  * in whatever tail the protocol data does not fill.
@@ -61,10 +63,14 @@
 
 /* Diagnostic IDs for this example: the tester addresses this instance on
  * PHYS_RX_ID and it answers on PHYS_TX_ID; FUNC_RX_ID is the broadcast request
- * ID every ECU on the bus listens to. The module never interprets the layout. */
+ * ID every ECU on the bus listens to, and FUNC_TX_ID is the same request ID as
+ * seen from the tester's side - a network has at most one functional sender, so
+ * only the instance that plays the tester configures it. The module never
+ * interprets the layout. */
 #define PHYS_RX_ID 0x7E0u
 #define PHYS_TX_ID 0x7E8u
 #define FUNC_RX_ID 0x7DFu
+#define FUNC_TX_ID 0x7DFu
 
 /* Copied into every SDU the module publishes, so one upper layer can serve
  * several instances from one queue. */
@@ -396,7 +402,7 @@ static void demo_send_single_frame(void)
     printf("5. send a short message\n");
 
     const uint8_t rsp[] = {0x59u, 0x02u, 0xFFu};
-    assert(nx_can_isotp_send(&g_iso, rsp, sizeof(rsp)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_iso, rsp, sizeof(rsp), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
 
     /* Nothing leaves the module until it is driven. */
     assert(pop_can_frame() == NULL);
@@ -433,7 +439,7 @@ static void demo_send_segmented(void)
     for (size_t i = 0; i < sizeof(payload); i++) {
         payload[i] = (uint8_t)(0xA0u + i);
     }
-    assert(nx_can_isotp_send(&g_iso, payload, sizeof(payload)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_iso, payload, sizeof(payload), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
 
     /* First process() emits the FF and then waits: the peer has not yet agreed
      * to receive, so no CF may follow. */
@@ -512,7 +518,7 @@ static void demo_send_wait_limit(void)
 
     uint8_t payload[20];
     memset(payload, 0x5Au, sizeof(payload));
-    assert(nx_can_isotp_send(&g_iso, payload, sizeof(payload)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_iso, payload, sizeof(payload), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
 
     nx_can_isotp_process(&g_iso);
     nx_ref_msg_t *m = pop_can_frame();
@@ -549,7 +555,7 @@ static void demo_send_wait_limit(void)
 
     /* Idle means ready: the next message goes out normally. */
     const uint8_t rsp[] = {0x7Fu, 0x10u, 0x78u};
-    assert(nx_can_isotp_send(&g_iso, rsp, sizeof(rsp)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_iso, rsp, sizeof(rsp), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
     nx_can_isotp_process(&g_iso);
     nx_ref_msg_t *sfm = pop_can_frame();
     assert(sfm != NULL);
@@ -625,7 +631,7 @@ static void demo_confirmations(void)
 
     /* --- a single frame goes out and is confirmed --- */
     const uint8_t sf[] = {0x50u, 0x03u};
-    assert(nx_can_isotp_send(&iso, sf, sizeof(sf)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&iso, sf, sizeof(sf), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
     nx_can_isotp_process(&iso);
     DRAIN_LOCAL();
     EXPECT_SDU(NX_TP_SDU_CONFIRM, NX_TP_N_OK);
@@ -634,7 +640,7 @@ static void demo_confirmations(void)
     /* --- flow control carrying a reserved status ends the transmission --- */
     uint8_t big[20];
     memset(big, 0x33u, sizeof(big));
-    assert(nx_can_isotp_send(&iso, big, sizeof(big)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&iso, big, sizeof(big), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
     nx_can_isotp_process(&iso);            /* FF out, now awaiting flow control */
     DRAIN_LOCAL();
 
@@ -732,8 +738,8 @@ static void demo_length_ceiling(void)
 
     /* --- a send request above the ceiling never reaches the pool --- */
     const uint8_t one = 0x00u;
-    assert(nx_can_isotp_send(&iso, &one, NX_CAN_ISOTP_MAX_MSG_LEN + 1u)
-           == NX_CAN_ISOTP_ERR_LENGTH);
+    assert(nx_can_isotp_send(&iso, &one, NX_CAN_ISOTP_MAX_MSG_LEN + 1u,
+                             NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_ERR_LENGTH);
     assert(nx_queue_is_empty(&sdu_rx_q));
     printf("  send(MAX_MSG_LEN + 1)    -> ERR_LENGTH\n");
 
@@ -871,7 +877,7 @@ static void demo_link_backpressure(void)
     /* --- transmit side: the single frame cannot go out yet --- */
     plug_link();
     const uint8_t msg[3] = {0x22u, 0xF1u, 0x90u};
-    assert(nx_can_isotp_send(&g_lk_iso, msg, sizeof(msg)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_lk_iso, msg, sizeof(msg), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
 
     nx_can_isotp_process(&g_lk_iso);
     /* Nothing was reported: the transmission is held, not finished. */
@@ -958,7 +964,7 @@ static void demo_link_timeout(void)
     /* --- transmit side: N_As expires --- */
     plug_link();
     const uint8_t msg[3] = {0x22u, 0xF1u, 0x90u};
-    assert(nx_can_isotp_send(&g_lk_iso, msg, sizeof(msg)) == NX_CAN_ISOTP_OK);
+    assert(nx_can_isotp_send(&g_lk_iso, msg, sizeof(msg), NX_TP_TA_PHYSICAL) == NX_CAN_ISOTP_OK);
 
     nx_can_isotp_process(&g_lk_iso);          /* refused: the frame is held */
     assert(nx_queue_is_empty(&g_lk_sdu_tx_q));
@@ -994,6 +1000,81 @@ static void demo_link_timeout(void)
 
     unplug_link();
     while (nx_queue_pop(&g_lk_can_tx_q, &m) == NX_QUEUE_OK) {
+        nx_ref_msg_release(m);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* 12. Send a functionally addressed single frame                      */
+/* ------------------------------------------------------------------ */
+/**
+ * @brief  Show the tester side broadcasting one request to every ECU at once.
+ *
+ * Functional addressing is 1:N, so it is single-frame only: the SF goes out on
+ * the functional request ID, and the module reports completion without any flow
+ * control having been involved. A request too long for one frame is refused
+ * before anything is queued.
+ */
+static void demo_send_functional(void)
+{
+    printf("12. send a functionally addressed single frame\n");
+
+    /* The functional send needs the request ID configured as an outgoing one,
+     * which this instance cannot also listen on: a tester that broadcasts and an
+     * ECU that hears broadcasts are different roles on different instances. So a
+     * small tester instance is set up here, listening on a spare physical ID. */
+    nx_can_isotp_t tester;
+    const nx_can_isotp_cfg_t tcfg = {
+        .max_frame_len = NX_CAN_ISOTP_FRAME_8,
+        .pad_frames    = true,
+        .pad_byte      = PAD_BYTE,
+        .phys_rx_id    = CEIL_RX_ID,   /* an ECU would answer on its own ID */
+        .phys_tx_id    = CEIL_TX_ID,
+        .func_tx_id    = FUNC_TX_ID,   /* the one functional sender on the bus */
+        .pool          = &g_pool,
+        .sdu_rx_queue  = &g_sdu_rx_q,
+        .sdu_tx_queue  = &g_sdu_tx_q,
+        .link          = LINK_ID,
+        .confirm_tx    = true,   /* the scenario asserts the confirmation */
+        .can_rx_queue  = &g_can_rx_q,
+        .can_tx_queue  = &g_can_tx_q,
+        .get_us        = mock_get_us,
+    };
+    assert(nx_can_isotp_init(&tester, &tcfg));
+
+    const uint8_t req[] = {0x10u, 0x03u};      /* ECU reset, broadcast */
+    assert(nx_can_isotp_send(&tester, req, sizeof(req), NX_TP_TA_FUNCTIONAL)
+           == NX_CAN_ISOTP_OK);
+
+    /* A functional message must fit one frame: no flow control exists to pace a
+     * longer one, so this is refused outright. */
+    const uint8_t big[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+    assert(nx_can_isotp_send(&tester, big, sizeof(big), NX_TP_TA_FUNCTIONAL)
+           == NX_CAN_ISOTP_ERR_PARAM);
+
+    nx_can_isotp_process(&tester);
+
+    nx_ref_msg_t *m = NULL;
+    assert(nx_queue_pop(&g_can_tx_q, &m) == NX_QUEUE_OK);
+    const nx_can_msg_t *f = (const nx_can_msg_t *)nx_ref_msg_data(m);
+    assert(f->id == FUNC_TX_ID);
+    assert(f->data[0] == (PEER_PCI_SF | 0x02u));
+    assert(f->data[1] == 0x10u && f->data[2] == 0x03u);
+    print_frame("SF ->", f);
+    nx_ref_msg_release(m);
+
+    /* The single frame completed the transmission, so a confirmation follows. */
+    assert(nx_queue_pop(&g_sdu_tx_q, &m) == NX_QUEUE_OK);
+    const nx_can_isotp_sdu_t *cf = (const nx_can_isotp_sdu_t *)nx_ref_msg_data(m);
+    assert(cf->kind == NX_TP_SDU_CONFIRM);
+    assert(cf->result == NX_TP_N_OK);
+    nx_ref_msg_release(m);
+    assert(nx_queue_is_empty(&g_sdu_tx_q));
+    printf("  broadcast request        -> one SF on 0x7DF, confirm N_OK\n");
+
+    /* The tester's empty can_rx queue must be drained, or the idempotent init
+     * check that follows would not see an empty queue. */
+    while (nx_queue_pop(&g_can_rx_q, &m) == NX_QUEUE_OK) {
         nx_ref_msg_release(m);
     }
 }
@@ -1037,7 +1118,7 @@ int nx_can_isotp_example_run(void)
         .pad_byte      = PAD_BYTE,
         .phys_rx_id    = PHYS_RX_ID,
         .phys_tx_id    = PHYS_TX_ID,
-        .func_rx_id    = FUNC_RX_ID,
+        .func_rx_id    = FUNC_RX_ID,    /* listen for functional requests */
         .pool          = &g_pool,
         .sdu_rx_queue  = &g_sdu_rx_q,   /* upper -> module: send requests   */
         .sdu_tx_queue  = &g_sdu_tx_q,   /* module -> upper: what it received */
@@ -1066,6 +1147,13 @@ int nx_can_isotp_example_run(void)
     demo_length_ceiling();
     demo_link_backpressure();
     demo_link_timeout();
+    demo_send_functional();
+
+    /* The four IDs must be mutually distinct while non-zero: here func_tx_id
+     * collides with phys_rx_id, which init must refuse. */
+    nx_can_isotp_cfg_t bad = cfg;
+    bad.func_tx_id = PHYS_RX_ID;
+    assert(nx_can_isotp_init(&g_iso, &bad) == false);
 
     /* Every message and frame the example touched has been released, so the
      * pool must be back to fully free. */
