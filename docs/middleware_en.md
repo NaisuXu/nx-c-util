@@ -14,8 +14,8 @@ context.
 - **Host/tool direction and channel** — `dir` (see `nx_can_dir_t`) distinguishes
   `TX` (host asks the tool to send), `RX` (received from the bus), and `TXR` (the
   tool's transmit-completion report for a prior `TX`). `ch` is a 4-bit channel
-  number: like `dir`, it is only meaningful in a tool/adapter context, naming
-  which CAN interface the frame belongs to.
+  number, 0..`NX_CAN_MAX_CH`: like `dir`, it is only meaningful in a tool/adapter
+  context, naming which CAN interface the frame belongs to.
 - **Error / result reporting** — an `is_err` flag plus a 4-bit `err_code` (see
   `nx_can_err_t`) share one encoding across both directions: on an `RX` frame it
   names an error frame's cause, on a `TXR` report it names why the transmit
@@ -327,10 +327,26 @@ thing that moves them.
   for flow control or a consecutive frame, a sequence number out of order, a flow
   status that is not defined, a peer that asked to wait too many times, or a
   message too long to receive. `kind` separates these from messages that arrived.
+- **One instance, one bus** — `ch` is the CAN channel the instance serves. It is
+  stamped into every emitted frame, so a driver spanning several buses reads off
+  the frame which one to transmit on, and it is matched on every received frame,
+  so a misrouted one is passed over. A driver holding one bus per module leaves it
+  0 at both ends and the match always holds.
+- **Configured frame format** — `ext_id`, `fd_frames` and `brs` are what every
+  emitted frame carries: a 29-bit identifier, a CAN FD frame, and the bit-rate
+  switch that runs its data phase at the faster rate. `ext_id` also decides which
+  received frames are this instance's traffic, since an 11-bit and a 29-bit
+  identifier of the same number name two different addresses.
+- **Frame geometry** — `max_frame_len` is the payload each frame carries, and it
+  must be one of the eight sizes a data length code expresses: 8, 12, 16, 20, 24,
+  32, 48 or 64. Anything above 8 needs `fd_frames`, and `brs` needs it too. A
+  wider geometry puts more into a single frame and more into each consecutive
+  frame, so a message that would need segmenting at 8 bytes may travel whole.
 - **Frame padding** — with `pad_frames` set, every emitted frame is raised to
   eight data bytes and the unused tail is filled with `pad_byte`, as the
   diagnostic networks that expect a fixed frame length require. Left clear, each
-  frame carries exactly the bytes it holds.
+  frame carries exactly the bytes it holds. Above eight bytes the tail is filled
+  either way, since a frame has to land on an expressible size.
 - **Paced, bounded transmission** — `tx_frames_per_process` caps how many frames
   leave per `process()` call, and `STmin` from the peer's flow control spaces
   consecutive frames against the injected clock.
@@ -360,7 +376,11 @@ nx_ref_msg_queue_init(&can_rx_q, can_rx_buf, 16);
 nx_ref_msg_queue_init(&can_tx_q, can_tx_buf, 16);
 
 const nx_can_isotp_cfg_t cfg = {
-    .max_frame_len = NX_CAN_ISOTP_FRAME_8,  /* 8 = classic CAN, 64 = CAN FD */
+    .max_frame_len = NX_CAN_ISOTP_FRAME_8,  /* 8/12/16/20/24/32/48/64 */
+    .ch            = 0u,                    /* the CAN channel this one serves */
+    .ext_id        = false,                 /* true = 29-bit identifiers */
+    .fd_frames     = false,                 /* true = CAN FD; required above 8 */
+    .brs           = false,                 /* true = bit-rate switch; needs FD */
     .pad_frames    = true,                  /* fill every frame out to 8 bytes */
     .pad_byte      = 0xCCu,                 /* what goes in the unused tail */
     .phys_rx_id    = 0x7E0u,                /* received physically addressed */
@@ -412,10 +432,15 @@ for (;;) {
 > module's *receive* queue.
 >
 > `process()` consumes every frame it finds on `can_rx_queue`, releasing the ones
-> whose ID matches neither receive ID. Two instances may therefore share one
-> `can_rx_queue` only if their ID sets are disjoint — whichever instance runs
-> first takes the frame, matched or not. Give each instance its own receive
-> queue, or filter in the driver, when that is not certain. Anything popped from
+> whose `ch` or identifier width does not match the configuration, or whose ID
+> matches neither receive ID. So a driver that leaves `ch` or `is_ext` clear on
+> every received frame makes an instance configured otherwise drop all of its
+> traffic; fill both flags in the driver's receive path, or leave `ch` and
+> `ext_id` at the values the driver actually reports. Matching on `ch` sorts
+> frames that reach the right instance; it does not make one `can_rx_queue`
+> shareable — every frame popped is released whether it matched or not, so
+> whichever instance runs first takes it and the others never see it. Give each
+> instance its own receive queue, or demultiplex in the driver. Anything popped from
 > `sdu_tx_queue` is a reference the consumer owns and must `nx_ref_msg_release()`
 > once handled; forgetting to is a pool leak, not a use-after-free, because the
 > block is only returned when the count reaches zero. Frames pushed to

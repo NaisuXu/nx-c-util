@@ -84,9 +84,20 @@
 extern "C" {
 #endif
 
-/** @brief Classic CAN: 8 payload bytes per frame. */
+/**
+ * @brief Payload bytes per frame, one value per expressible frame size.
+ *
+ * 8 bytes is the only size a classic CAN frame carries. The larger sizes are
+ * the ones a data length code expresses, so a frame of that size is exactly
+ * full; a size between two of them cannot be put on the wire.
+ */
 #define NX_CAN_ISOTP_FRAME_8  8u
-/** @brief CAN FD: 64 payload bytes per frame. */
+#define NX_CAN_ISOTP_FRAME_12 12u
+#define NX_CAN_ISOTP_FRAME_16 16u
+#define NX_CAN_ISOTP_FRAME_20 20u
+#define NX_CAN_ISOTP_FRAME_24 24u
+#define NX_CAN_ISOTP_FRAME_32 32u
+#define NX_CAN_ISOTP_FRAME_48 48u
 #define NX_CAN_ISOTP_FRAME_64 64u
 
 /**
@@ -183,9 +194,21 @@ typedef struct {
  * cfg needs only the addressing and the queues filled in.
  */
 typedef struct {
-    /* ---- frame geometry ---- */
+    /* ---- frame format and geometry ---- */
     uint8_t  max_frame_len;   /**< Payload bytes per CAN frame. Must be one of
-                               8 (classic CAN) or 64 (CAN FD). */
+                               8, 12, 16, 20, 24, 32, 48 or 64. Anything above 8
+                               requires @c fd_frames. */
+    bool     ext_id;          /**< true: this instance speaks in 29-bit identifiers.
+                               Every frame it emits carries one, and a received
+                               frame is considered only when its identifier is of
+                               the same width, so the two identifier spaces stay
+                               separate. */
+    bool     fd_frames;       /**< true: emit CAN FD frames. Required once
+                               @c max_frame_len exceeds 8, and also usable at 8,
+                               which puts a classic-sized payload in an FD frame. */
+    bool     brs;             /**< true: request the bit-rate switch on emitted
+                               frames, so their data phase runs at the faster
+                               rate. Requires @c fd_frames. */
     bool     pad_frames;      /**< true: raise every emitted frame to 8 data bytes,
                                filling the tail with @c pad_byte. false: emit the
                                exact length the frame carries. Frames longer than 8
@@ -195,7 +218,14 @@ typedef struct {
     uint8_t  pad_byte;        /**< Filler written into an emitted frame's unused
                                tail. */
 
-    /* ---- addressing: the physical pair, plus optional functional reception ---- */
+    /* ---- addressing: the channel, the physical pair, plus optional
+     *      functional reception ---- */
+    uint8_t  ch;              /**< CAN channel this instance serves, 0..15. Stamped
+                               into every emitted frame, so a driver spanning
+                               several buses reads off it which one to transmit on,
+                               and matched on every received frame. Left 0 it names
+                               channel 0, which is what a single-bus driver that
+                               never fills the field reports. */
     uint32_t phys_rx_id;      /**< CAN ID this instance receives physically addressed
                                messages on. Required. */
     uint32_t phys_tx_id;      /**< CAN ID this instance transmits under, and sends flow
@@ -279,7 +309,10 @@ typedef struct nx_can_isotp {
  * @brief  Initialize an instance from a configuration.
  *
  * @param  iso Instance to initialize, must not be NULL.
- * @param  cfg Configuration, must not be NULL; @c max_frame_len in {8,64};
+ * @param  cfg Configuration, must not be NULL; @c max_frame_len in
+ *             {8,12,16,20,24,32,48,64}, with @c fd_frames set for anything
+ *             above 8; @c brs only with @c fd_frames; @c ch at most
+ *             @c NX_CAN_MAX_CH;
  *             @c phys_rx_id and @c phys_tx_id required and distinct;
  *             @c func_rx_id, when non-zero, distinct from both;
  *             @c func_tx_id, when non-zero, distinct from all three others;

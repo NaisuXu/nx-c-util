@@ -133,7 +133,10 @@ static bool istp_emit_frame(nx_can_isotp_t *iso, uint32_t id,
     cm->id            = id;
     cm->flags.raw     = 0u;
     cm->timestamp     = 0u;
-    cm->flags.bits.is_fd = (iso->cfg.max_frame_len == NX_CAN_ISOTP_FRAME_64);
+    cm->flags.bits.ch     = iso->cfg.ch;
+    cm->flags.bits.is_ext = iso->cfg.ext_id;
+    cm->flags.bits.is_fd  = iso->cfg.fd_frames;
+    cm->flags.bits.brs    = iso->cfg.brs;
     uint8_t *d = cm->data;
     memcpy(d, pci, pci_hdr);
     if (chunk > 0u) {
@@ -787,6 +790,19 @@ static void istp_intake(nx_can_isotp_t *iso, const nx_can_msg_t *frame)
         return;                     /* no protocol control byte to act on */
     }
 
+    /* The channel names the bus the frame came off, and an instance serves one
+     * bus, so a frame from any other channel belongs to somebody else. */
+    if (frame->flags.bits.ch != iso->cfg.ch) {
+        return;
+    }
+
+    /* An 11-bit and a 29-bit identifier of the same numeric value name two
+     * different addresses, so a frame from the other space is not this
+     * instance's traffic however its number reads. */
+    if ((bool)frame->flags.bits.is_ext != iso->cfg.ext_id) {
+        return;
+    }
+
     if (frame->id == iso->cfg.phys_rx_id) {
         if ((frame->data[0] & 0xF0u) == NX_CAN_ISOTP_PCI_FC) {
             istp_tx_apply_fc(iso, frame);   /* feed the in-flight send */
@@ -830,13 +846,40 @@ static void istp_drain_can_rx(nx_can_isotp_t *iso)
 /* Public API                                                               */
 /* ======================================================================== */
 
+/**
+ * @brief  Whether a frame length is one a data length code expresses exactly.
+ *
+ * Rounding a length to a code and reading that code back returns the same
+ * number only for the sizes that sit on the wire. A length between two of them
+ * would leave a frame the geometry cannot fill, so it is not a usable setting.
+ */
+static bool istp_frame_len_valid(uint8_t len)
+{
+    if (len < NX_CAN_ISOTP_FRAME_8) {
+        return false;
+    }
+    return nx_can_dlc_to_len(nx_can_len_to_dlc((uint32_t)len)) == (uint32_t)len;
+}
+
 bool nx_can_isotp_init(nx_can_isotp_t *iso, const nx_can_isotp_cfg_t *cfg)
 {
     if (iso == NULL || cfg == NULL) {
         return false;
     }
-    if (cfg->max_frame_len != NX_CAN_ISOTP_FRAME_8 &&
-        cfg->max_frame_len != NX_CAN_ISOTP_FRAME_64) {
+    if (!istp_frame_len_valid(cfg->max_frame_len)) {
+        return false;
+    }
+    /* Only an FD frame carries more than the classic eight bytes, and only an
+     * FD frame has a data phase to switch the rate of. */
+    if (cfg->max_frame_len > NX_CAN_ISOTP_FRAME_8 && !cfg->fd_frames) {
+        return false;
+    }
+    if (cfg->brs && !cfg->fd_frames) {
+        return false;
+    }
+    /* The channel travels in a 4-bit field, so a larger number would be stamped
+     * onto frames as a different channel than the one asked for. */
+    if (cfg->ch > NX_CAN_MAX_CH) {
         return false;
     }
     /* A conversation needs both directions, and they must be distinct: flow

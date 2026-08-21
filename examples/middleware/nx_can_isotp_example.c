@@ -26,7 +26,7 @@
  * addressing requires: the module receives on PHYS_RX_ID and answers on
  * PHYS_TX_ID - including the flow control it sends while receiving.
  *
- * Twelve scenarios are exercised:
+ * Thirteen scenarios are exercised:
  *   1. Receive a single frame                  -> one SDU handed up, no FC
  *   2. Receive a segmented message (FF + CFs)  -> FC on the transmit ID carrying
  *                                                 the configured BS/STmin, and a
@@ -48,9 +48,15 @@
  *                                                 side reports TIMEOUT_A
  *  12. A functionally addressed send            -> one SF on the functional ID,
  *                                                 no flow control involved
+ *  13. A 29-bit FD instance on 20-byte frames -> the configured channel and
+ *                                                 format on every emitted frame,
+ *                                                 a frame from another channel
+ *                                                 or identifier width ignored,
+ *                                                 and the geometries and channels
+ *                                                 init accepts and refuses
  *
- * Padding is on throughout, so every emitted frame is a full 8 bytes with 0xCC
- * in whatever tail the protocol data does not fill.
+ * Padding is on for the first twelve scenarios, so every frame they emit is a
+ * full 8 bytes with 0xCC in whatever tail the protocol data does not fill.
  *
  * All storage is static; the example self-checks with asserts and prints the wire.
  */
@@ -134,6 +140,7 @@ static uint32_t mock_get_us(void)
 /* The pool sizes two block classes: CAN frames and SDUs. A block must hold the
  * nx_ref_msg header as well as the payload, since the two are one allocation. */
 #define FRAME_BLOCK (sizeof(nx_ref_msg_t) + sizeof(nx_can_msg_t) + NX_CAN_MAX_CLASSIC_LEN)
+#define WIDE_BLOCK  (sizeof(nx_ref_msg_t) + sizeof(nx_can_msg_t) + NX_CAN_ISOTP_FRAME_20)
 #define SDU_BLOCK   (sizeof(nx_ref_msg_t) + sizeof(nx_can_isotp_sdu_t) + 64u)
 
 static uint8_t  g_pool_mem[8192];
@@ -1080,15 +1087,186 @@ static void demo_send_functional(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* 13. Frame format and a wider geometry                              */
+/* ------------------------------------------------------------------ */
+/**
+ * @brief  Show the frame format an instance speaks and the geometry it fills.
+ *
+ * Channel, identifier width, frame type and bit-rate switch are configured, not
+ * derived from the message being carried: every frame this instance emits
+ * carries the four it was given, and a frame arriving off another channel, or
+ * under the other identifier width, is not its traffic however the number reads.
+ *
+ * Twenty bytes per frame is the geometry here, so a message that would need a
+ * first frame and a consecutive frame on an eight-byte geometry goes out whole.
+ */
+#define FMT_RX_ID 0x18DA10F1u          /* a 29-bit diagnostic pair */
+#define FMT_TX_ID 0x18DAF110u
+#define FMT_LINK_ID 9u
+#define FMT_CH      2u                 /* the bus this instance serves */
+
+static nx_ref_msg_t  *g_fmt_sdu_tx_buf[4], *g_fmt_sdu_rx_buf[4];
+static nx_ref_msg_t  *g_fmt_can_rx_buf[4], *g_fmt_can_tx_buf[4];
+static nx_queue_t     g_fmt_sdu_tx_q, g_fmt_sdu_rx_q, g_fmt_can_rx_q, g_fmt_can_tx_q;
+static nx_can_isotp_t g_fmt_iso;
+
+/** @brief Push one frame at the format instance on a chosen channel and width. */
+static void feed_fmt_frame(uint8_t ch, bool ext, const uint8_t *payload, size_t len)
+{
+    nx_ref_msg_t *m = nx_ref_msg_alloc(&g_pool, sizeof(nx_can_msg_t) + len);
+    assert(m != NULL);
+
+    nx_can_msg_t *f = (nx_can_msg_t *)nx_ref_msg_data(m);
+    f->id                = FMT_RX_ID;
+    f->flags.raw         = 0u;
+    f->timestamp         = 0u;
+    f->flags.bits.ch     = ch;
+    f->flags.bits.is_ext = ext;
+    f->flags.bits.dlc    = nx_can_len_to_dlc((uint32_t)len);
+    memcpy(f->data, payload, len);
+
+    assert(nx_ref_msg_publish(m, &g_fmt_can_rx_q) == NX_REF_MSG_OK);
+    nx_ref_msg_release(m);
+}
+
+static void demo_frame_format(void)
+{
+    printf("13. frame format and a wider geometry\n");
+
+    assert(nx_ref_msg_queue_init(&g_fmt_sdu_tx_q, g_fmt_sdu_tx_buf, 4) == NX_QUEUE_OK);
+    assert(nx_ref_msg_queue_init(&g_fmt_sdu_rx_q, g_fmt_sdu_rx_buf, 4) == NX_QUEUE_OK);
+    assert(nx_ref_msg_queue_init(&g_fmt_can_rx_q, g_fmt_can_rx_buf, 4) == NX_QUEUE_OK);
+    assert(nx_ref_msg_queue_init(&g_fmt_can_tx_q, g_fmt_can_tx_buf, 4) == NX_QUEUE_OK);
+
+    const nx_can_isotp_cfg_t cfg = {
+        .max_frame_len = NX_CAN_ISOTP_FRAME_20,
+        .ch            = FMT_CH,        /* the bus it speaks on         */
+        .ext_id        = true,          /* 29-bit identifiers          */
+        .fd_frames     = true,          /* required above eight bytes  */
+        .brs           = true,          /* data phase at the fast rate */
+        .phys_rx_id    = FMT_RX_ID,
+        .phys_tx_id    = FMT_TX_ID,
+        .pool          = &g_pool,
+        .sdu_rx_queue  = &g_fmt_sdu_rx_q,
+        .sdu_tx_queue  = &g_fmt_sdu_tx_q,
+        .link          = FMT_LINK_ID,
+        .can_rx_queue  = &g_fmt_can_rx_q,
+        .can_tx_queue  = &g_fmt_can_tx_q,
+        .get_us        = mock_get_us,
+        .n_bs_us       = N_BS_US,
+        .n_cr_us       = N_CR_US,
+        .rx_max_len    = RX_MAX_LEN,
+        .tx_frames_per_process = 1u,
+    };
+    assert(nx_can_isotp_init(&g_fmt_iso, &cfg));
+
+    /* Twelve bytes: more than a one-byte header can announce, so the length
+     * escapes to a second header byte. Fourteen bytes of protocol data land in
+     * the smallest code that holds them, which is the sixteen-byte one. */
+    uint8_t req[12];
+    for (size_t i = 0; i < sizeof(req); i++) {
+        req[i] = (uint8_t)(0xA0u + i);
+    }
+    assert(nx_can_isotp_send(&g_fmt_iso, req, sizeof(req), NX_TP_TA_PHYSICAL)
+           == NX_CAN_ISOTP_OK);
+    nx_can_isotp_process(&g_fmt_iso);
+
+    nx_ref_msg_t *m = NULL;
+    assert(nx_queue_pop(&g_fmt_can_tx_q, &m) == NX_QUEUE_OK);
+    const nx_can_msg_t *f = (const nx_can_msg_t *)nx_ref_msg_data(m);
+    print_frame("SF ->", f);
+    assert(f->id == FMT_TX_ID);
+    assert(f->flags.bits.ch     == FMT_CH);
+    assert(f->flags.bits.is_ext == 1u);
+    assert(f->flags.bits.is_fd  == 1u);
+    assert(f->flags.bits.brs    == 1u);
+    assert(f->data[0] == PEER_PCI_SF);          /* nibble 0: length escapes */
+    assert(f->data[1] == (uint8_t)sizeof(req));
+    assert(memcmp(f->data + 2, req, sizeof(req)) == 0);
+    assert(nx_can_dlc_to_len(f->flags.bits.dlc) == 16u);
+    nx_ref_msg_release(m);
+    assert(nx_queue_is_empty(&g_fmt_can_tx_q));
+    printf("  12 bytes out             -> ch %u, 29-bit + FD + BRS\n", FMT_CH);
+
+    /* A frame off another bus reaches this queue only by misrouting, and it is
+     * not addressed to an instance that serves a different one. */
+    const uint8_t sf[] = {0x02u, 0x10u, 0x03u};
+    feed_fmt_frame(FMT_CH + 1u, true, sf, sizeof(sf));
+    nx_can_isotp_process(&g_fmt_iso);
+    assert(nx_queue_is_empty(&g_fmt_sdu_tx_q));
+    printf("  same ID, other channel   -> another bus, ignored\n");
+
+    /* An 11-bit identifier of this number names a different address, so the
+     * frame is not addressed to this instance. */
+    feed_fmt_frame(FMT_CH, false, sf, sizeof(sf));
+    nx_can_isotp_process(&g_fmt_iso);
+    assert(nx_queue_is_empty(&g_fmt_sdu_tx_q));
+    printf("  same number, 11-bit in   -> a different address, ignored\n");
+
+    feed_fmt_frame(FMT_CH, true, sf, sizeof(sf));
+    nx_can_isotp_process(&g_fmt_iso);
+    assert(nx_queue_pop(&g_fmt_sdu_tx_q, &m) == NX_QUEUE_OK);
+    const nx_can_isotp_sdu_t *sdu = (const nx_can_isotp_sdu_t *)nx_ref_msg_data(m);
+    assert(sdu->kind == NX_TP_SDU_INDICATION);
+    assert(sdu->ta_type == NX_TP_TA_PHYSICAL);
+    assert(sdu->link == FMT_LINK_ID);
+    assert(sdu->len == 2u);
+    assert(sdu->data[0] == 0x10u && sdu->data[1] == 0x03u);
+    printf("  same number, 29-bit in   -> accepted, %u bytes\n", (unsigned)sdu->len);
+    nx_ref_msg_release(m);
+    assert(nx_queue_is_empty(&g_fmt_sdu_tx_q));
+
+    /* Every geometry a data length code expresses is a usable setting, and a
+     * length between two of them is not. */
+    static const uint8_t sizes[] = {
+        NX_CAN_ISOTP_FRAME_8,  NX_CAN_ISOTP_FRAME_12, NX_CAN_ISOTP_FRAME_16,
+        NX_CAN_ISOTP_FRAME_20, NX_CAN_ISOTP_FRAME_24, NX_CAN_ISOTP_FRAME_32,
+        NX_CAN_ISOTP_FRAME_48, NX_CAN_ISOTP_FRAME_64,
+    };
+    nx_can_isotp_cfg_t probe = cfg;
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        probe.max_frame_len = sizes[i];
+        assert(nx_can_isotp_init(&g_fmt_iso, &probe));
+    }
+    printf("  8/12/16/20/24/32/48/64   -> all accepted\n");
+
+    /* Only an FD frame carries more than the classic eight bytes, and only an
+     * FD frame has a data phase whose rate there is anything to switch. */
+    nx_can_isotp_cfg_t bad = cfg;
+    bad.fd_frames = false;
+    assert(nx_can_isotp_init(&g_fmt_iso, &bad) == false);
+
+    bad = cfg;
+    bad.max_frame_len = NX_CAN_ISOTP_FRAME_8;
+    bad.fd_frames     = false;                   /* brs still asked for */
+    assert(nx_can_isotp_init(&g_fmt_iso, &bad) == false);
+
+    bad = cfg;
+    bad.max_frame_len = 10u;                     /* no code expresses ten */
+    assert(nx_can_isotp_init(&g_fmt_iso, &bad) == false);
+
+    bad = cfg;
+    bad.max_frame_len = 4u;                      /* below a full classic frame */
+    assert(nx_can_isotp_init(&g_fmt_iso, &bad) == false);
+
+    bad = cfg;
+    bad.ch = NX_CAN_MAX_CH + 1u;                 /* wider than the ch field */
+    assert(nx_can_isotp_init(&g_fmt_iso, &bad) == false);
+    printf("  20 without FD, BRS without FD, 10, 4, ch 16 -> refused\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                        */
 /* ------------------------------------------------------------------ */
 int nx_can_isotp_example_run(void)
 {
     printf("=== nx_can_isotp example ===\n");
 
-    /* One tier for CAN frames, one for the SDUs this example moves. */
+    /* One tier for eight-byte CAN frames, one for the twenty-byte frames the
+     * last scenario puts on the wire, and one for the SDUs. */
     const nx_tiered_level_cfg_t tiers[] = {
         {FRAME_BLOCK, 24},
+        {WIDE_BLOCK,   4},
         {SDU_BLOCK,    8},
     };
     const nx_tiered_mem_pool_cfg_t pool_cfg = {
@@ -1148,6 +1326,7 @@ int nx_can_isotp_example_run(void)
     demo_link_backpressure();
     demo_link_timeout();
     demo_send_functional();
+    demo_frame_format();
 
     /* The four IDs must be mutually distinct while non-zero: here func_tx_id
      * collides with phys_rx_id, which init must refuse. */

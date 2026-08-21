@@ -29,6 +29,13 @@ extern "C" {
  */
 #define NX_CAN_MAX_DLC 15u
 
+/**
+ * @brief Largest valid channel number.
+ *
+ * The @c ch field is 4 bits, so a channel ranges 0..15.
+ */
+#define NX_CAN_MAX_CH 15u
+
 /** @brief Maximum payload of a classic CAN frame, in bytes. */
 #define NX_CAN_MAX_CLASSIC_LEN 8u
 
