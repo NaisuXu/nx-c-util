@@ -18,7 +18,7 @@
  * different address ranges: each subscribes to the ranges it owns and receives
  * matching requests as data on its own queue.
  *
- * Seven requests are fed in to exercise every path:
+ * Eight requests are fed in to exercise every path:
  *   1. read holding regs @0x0000 x2   -> valve
  *   2. read input regs   @0x8000 x4   -> sys
  *   3. write single reg  @0x0001, addressed to broadcast (0) -> dropped, silent
@@ -26,6 +26,7 @@
  *   5. read holding regs @0x0020 x1   -> func owned, addr out of range -> exc 0x02
  *   6. write single reg  @0x0002 = 4000 -> well-formed, valve rejects it -> exc 0x03
  *   7. write single reg  @0x0002 = 60   -> accepted -> write confirmation echoed
+ *   8. read holding regs @0xFFFF x2   -> span runs past 0xFFFF -> exc 0x02
  *
  * All storage is static; the example self-checks with asserts and prints the wire.
  */
@@ -269,8 +270,8 @@ int nx_modbus_rtu_slave_example_run(void)
         return 1;
     }
 
-    /* ---- scripted master traffic: 7 back-to-back requests ---- */
-    uint8_t stream[64];
+    /* ---- scripted master traffic: 8 back-to-back requests ---- */
+    uint8_t stream[96];   /* 8 requests x 8 bytes, with slack */
     size_t  sn = 0;
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 2);
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_INPUT_REGS,   0x8000, 4);
@@ -284,6 +285,12 @@ int nx_modbus_rtu_slave_example_run(void)
      * dispatches it; only the valve module knows 4000 is not a valid position. */
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0002, 4000);
     sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_WRITE_SINGLE_REG,  0x0002, 60);
+    /* A span that runs off the end of the address space: registers 0xFFFF and 0x10000.
+     * The quantity is structurally legal (1..125), so it reaches the containment check,
+     * where the end address must stay 0x10000 and not wrap to 0x0000 - which would land
+     * inside the valve's 0x0000..0x000F range and be dispatched to a module that owns
+     * neither register. */
+    sn += build_fixed_req(stream + sn, SLAVE_ADDR, NX_MODBUS_FC_READ_HOLDING_REGS, 0xFFFF, 2);
     g_io.rx     = stream;
     g_io.rx_len = sn;
 
@@ -318,14 +325,17 @@ int nx_modbus_rtu_slave_example_run(void)
     struct { uint8_t cmd; uint8_t info; size_t len; } expect[] = {
         { NX_MODBUS_FC_READ_COILS        | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_FUNCTION,   5 },
         { NX_MODBUS_FC_READ_HOLDING_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR,  5 },
+        { NX_MODBUS_FC_READ_HOLDING_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR,  5 },   /* req 8: span crossed 0xFFFF */
         { NX_MODBUS_FC_READ_HOLDING_REGS,                               4 /* byte_count */,              3 + 4 + 2 },
         { NX_MODBUS_FC_WRITE_SINGLE_REG  | NX_MODBUS_RTU_EXCEPTION_FLAG, NX_MODBUS_EXC_ILLEGAL_DATA_VALUE, 5 },
         { NX_MODBUS_FC_WRITE_SINGLE_REG,                                0x00 /* addr_h */,               8 },
         { NX_MODBUS_FC_READ_INPUT_REGS,                                 8 /* byte_count */,              3 + 8 + 2 },
     };
     size_t off = 0;
+    size_t at[sizeof(expect) / sizeof(expect[0])];   /* where each frame started */
     for (size_t k = 0; k < sizeof(expect) / sizeof(expect[0]); k++) {
         const uint8_t *f = g_io.tx + off;
+        at[k] = off;
         assert(off + expect[k].len <= g_io.tx_len);
         assert(f[1] == expect[k].cmd);
         assert(f[2] == expect[k].info);                       /* exc code or byte_count */
@@ -333,14 +343,23 @@ int nx_modbus_rtu_slave_example_run(void)
         off += expect[k].len;
     }
     assert(off == g_io.tx_len);   /* nothing extra, nothing missing */
-    printf("  OK: 3 exceptions + 2 data responses + 1 write confirmation,\n"
+    printf("  OK: 4 exceptions + 2 data responses + 1 write confirmation,\n"
            "      in order, every CRC valid\n");
     /* The write confirmation must echo the accepted request byte for byte: same data
      * address (0x0002) and the same value (60) the master asked to write. */
-    const uint8_t *wr = g_io.tx + 5u + 5u + (3u + 4u + 2u) + 5u;   /* frame 5 */
+    const uint8_t *wr = g_io.tx + at[5];   /* the write confirmation */
     assert(((wr[2] << 8) | wr[3]) == 0x0002);
     assert(((wr[4] << 8) | wr[5]) == 60);
     printf("  OK: the write confirmation echoes addr=0x0002 value=60\n");
+    /* The last frame answers the span that runs past 0xFFFF. It exists only because the
+     * end address is computed wide: truncated to 16 bits it would have been 0x0000,
+     * landing inside the valve's range, and the request would have been dispatched to a
+     * module owning neither register instead of refused. */
+    const uint8_t *ovf = g_io.tx + at[2];   /* the answer to request 8 */
+    assert(ovf[1] == (NX_MODBUS_FC_READ_HOLDING_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG));
+    assert(ovf[2] == NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
+    printf("  OK: the span crossing 0xFFFF drew exception 0x%02X, not a dispatch\n",
+           NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
     /* The broadcast frame produced none of the above: had it been accepted it would
      * have reached the valve queue, and had it been mistaken for unicast it would
      * have drawn a response. The exact-length match above proves neither happened. */

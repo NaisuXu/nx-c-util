@@ -55,18 +55,23 @@ static size_t frame_len(uint8_t cmd, const uint8_t *p, size_t avail)
 
 /**
  * @brief The register span a request touches, as an inclusive [lo, hi].
+ *
+ * @p hi is 32-bit so that a span running off the end of the 16-bit address space is
+ * reported as it was asked for rather than wrapped: a request for 24 registers from
+ * 0xFFF8 yields hi = 0x1000F. No subscription can contain such a span, so it is
+ * rejected by the containment check like any other out-of-range request.
  */
-static void request_span(uint8_t cmd, const uint8_t *f, uint16_t *lo, uint16_t *hi)
+static void request_span(uint8_t cmd, const uint8_t *f, uint16_t *lo, uint32_t *hi)
 {
     uint16_t a = (uint16_t)(((uint16_t)f[2] << 8) | f[3]);   /* address field */
 
+    *lo = a;
+
     if (cmd == NX_MODBUS_FC_WRITE_SINGLE_COIL || cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
-        *lo = a;
         *hi = a;                                             /* single address */
     } else {
         uint16_t q = (uint16_t)(((uint16_t)f[4] << 8) | f[5]);  /* quantity */
-        *lo = a;
-        *hi = (q == 0u) ? a : (uint16_t)(a + q - 1u);
+        *hi = (q == 0u) ? a : ((uint32_t)a + q - 1u);
     }
 }
 
@@ -169,8 +174,10 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
     }
 
     /* 3. Address containment: copy the ADU once, publish the same object to every
-     *    subscription whose owned range contains the whole span it touches. */
-    uint16_t lo, hi;
+     *    subscription whose owned range contains the whole span it touches. A span that
+     *    runs past 0xFFFF has hi > any addr_max, so it matches nothing and draws 0x02. */
+    uint16_t lo;
+    uint32_t hi;
     request_span(cmd, frame, &lo, &hi);
 
     nx_ref_msg_t *msg = NULL;
