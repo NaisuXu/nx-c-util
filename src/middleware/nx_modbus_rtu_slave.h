@@ -80,6 +80,8 @@ typedef enum {
  * The span a request touches:
  *   - 01/02/03/04, 0F/10: [start_addr, start_addr + quantity - 1];
  *   - 05/06 (single write): just the single data address.
+ * A span whose end runs past 0xFFFF lies outside every possible range and is refused
+ * with 0x02; it is never wrapped around into a low address.
  * The slave settles structural legality before dispatch - function support (0x01),
  * quantity range and byte_count consistency (0x03), and address containment (0x02).
  * A matched request is therefore well-formed; whether a value is operationally
