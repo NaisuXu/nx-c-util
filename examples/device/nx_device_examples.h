@@ -15,6 +15,9 @@ extern "C" {
 /** Run the nx_ws2812 usage examples. Returns 0 on success, non-zero on failure. */
 int nx_ws2812_example_run(void);
 
+/** Run the nx_mfrc522 usage examples. Returns 0 on success, non-zero on failure. */
+int nx_mfrc522_example_run(void);
+
 #ifdef __cplusplus
 }
 #endif
