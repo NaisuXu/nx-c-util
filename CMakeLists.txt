@@ -46,6 +46,7 @@ add_executable(nx_core_examples
     examples/core/nx_timer_example.c
     examples/core/nx_coro_example.c
     examples/core/nx_log_example.c
+    examples/core/nx_event_flags_example.c
     ${NX_CORE_SOURCES}
 )
 

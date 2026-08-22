@@ -36,6 +36,9 @@ int nx_coro_example_run(void);
 /** Run the nx_log usage examples. Returns 0 on success, non-zero on failure. */
 int nx_log_example_run(void);
 
+/** Run the nx_event_flags usage examples. Returns 0 on success, non-zero on failure. */
+int nx_event_flags_example_run(void);
+
 #ifdef __cplusplus
 }
 #endif

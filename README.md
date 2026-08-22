@@ -50,6 +50,7 @@ containing the copied files to your include path.
 - [nx_coro](docs/core_en.md#nx_coro--stackless-coroutines) — stackless coroutines
 - [nx_lock](docs/core_en.md#nx_lock--pluggable-critical-section-abstraction) — pluggable critical-section abstraction
 - [nx_log](docs/core_en.md#nx_log--static-asynchronous-plain-text-logging) — static asynchronous plain-text logging
+- [nx_event_flags](docs/core_en.md#nx_event_flags--polled-event-flags-for-cooperative-loops) — polled event flags for cooperative loops
 
 See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and examples.
 

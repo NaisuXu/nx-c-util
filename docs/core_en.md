@@ -491,3 +491,63 @@ for (;;) {
 > lines are evicted — either way a line is never written half-way. Set `lock` only
 > when more than one context logs into the same handle.
 
+## nx_event_flags — polled event flags for cooperative loops
+
+A header-only event-flags module: 32 bits you can set, clear, test, and
+atomically take. Each bit is one event. Use this for lightweight signaling between
+ISRs and the main loop, or between modules that need to broadcast readiness /
+coordinate shutdown. Non-blocking: you poll the flags when you run, so they fit
+naturally into a cooperative loop without a scheduler.
+
+- **32 independent bits** — each bit is one event (user-defined meaning).
+- **Set / clear / test / take** — `set` raises flags, `clear` lowers them, `test`
+  checks (non-consuming), `take` does an atomic test-and-clear. Use `test` for
+  broadcast events (every module sees it), `take` for one-shot work items (one
+  consumer gets it).
+- **Barrier primitive: test_all** — returns true only when every bit in the mask
+  is set. Use this for acknowledgment barriers (wait for three modules to each set
+  their own ack bit) or multi-part readiness checks.
+- **Coalescing** — setting the same flag multiple times before a take still reads
+  as one raised bit. The flag tells you "at least one X happened," not a count.
+- **Optional ISR safety** — pass an `nx_lock` at init to make set/clear/take
+  atomic against interrupt preemption. Read-only operations (`test`, `test_all`,
+  `get`) need no lock (single 32-bit read). Omit the lock when all accesses are
+  from one context.
+- **Zero allocation, header-only** — the instance is 8 bytes (one `uint32_t` plus
+  a lock pointer); all operations are `static inline`.
+
+```c
+#include "src/core/nx_event_flags.h"
+
+/* Scenario: ISR sets flags, main loop takes them */
+#define RX_READY   (1u << 0)
+#define TX_DONE    (1u << 1)
+#define TIMER_TICK (1u << 2)
+
+nx_event_flags_t g_events;
+nx_event_flags_init(&g_events, &g_isr_lock);   /* with lock for ISR safety */
+
+/* In the ISR */
+void uart_rx_isr(void) {
+    nx_event_flags_set(&g_events, RX_READY);   /* atomic under lock */
+}
+
+/* In the main loop */
+for (;;) {
+    if (nx_event_flags_take(&g_events, RX_READY)) {
+        /* flag was set (and is now cleared); process the RX byte */
+        handle_rx();
+    }
+    if (nx_event_flags_test(&g_events, TIMER_TICK)) {
+        /* non-consuming: flag stays set until explicitly cleared */
+    }
+}
+```
+
+> **Note:** `test` / `test_all` are read-only and leave the flags raised — use
+> these for broadcast events multiple modules need to see. `take` is atomic
+> test-and-clear (one consumer gets it, flag is cleared). Multiple `set` calls
+> before a `take` coalesce into one raised bit — the flag says "at least once,"
+> not a count. Pass a lock at init only when an ISR and the main loop share the
+> instance; single-context use needs no lock.
+

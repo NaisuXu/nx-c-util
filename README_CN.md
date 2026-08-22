@@ -46,6 +46,7 @@ nx-c-util/
 - [nx_coro](docs/core_cn.md#nx_coro--无栈协程) — 无栈协程
 - [nx_lock](docs/core_cn.md#nx_lock--可插拔的临界区抽象) — 可插拔的临界区抽象
 - [nx_log](docs/core_cn.md#nx_log--静态异步明文日志) — 静态异步明文日志
+- [nx_event_flags](docs/core_cn.md#nx_event_flags--协作式循环的轮询事件标志) — 协作式循环的轮询事件标志
 
 详细说明和示例请参阅[核心模块文档](docs/core_cn.md)。
 

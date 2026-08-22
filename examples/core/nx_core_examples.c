@@ -11,6 +11,7 @@
  *   - nx_timer_example.c          -> nx_timer_example_run()
  *   - nx_coro_example.c           -> nx_coro_example_run()
  *   - nx_log_example.c            -> nx_log_example_run()
+ *   - nx_event_flags_example.c    -> nx_event_flags_example_run()
  */
 #include "nx_core_examples.h"
 
@@ -28,6 +29,7 @@ int main(void)
     rc |= nx_timer_example_run();
     rc |= nx_coro_example_run();
     rc |= nx_log_example_run();
+    rc |= nx_event_flags_example_run();
 
     return rc;
 }
