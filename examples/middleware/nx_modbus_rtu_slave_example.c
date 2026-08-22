@@ -77,6 +77,53 @@ static bool mock_write(void *ctx, const uint8_t *src, size_t len)
     return true;   /* blocking write: complete on return, so is_busy is NULL */
 }
 
+/* A transmitter that never accepts anything: stands in for a UART whose TX path is
+ * unavailable (DMA already armed, peripheral in an error state). */
+static bool mock_write_fail(void *ctx, const uint8_t *src, size_t len)
+{
+    (void)ctx; (void)src; (void)len;
+    return false;
+}
+
+/* A transmitter that accepts a frame and then never reports it finished: stands in for
+ * a peripheral that hangs mid-send. Leaves the TX state machine parked in TX_SENDING,
+ * which is the only state in which the slave itself is holding a pool block. */
+static bool g_tx_hung;   /* set when a write starts; never clears */
+
+static bool mock_write_hang(void *ctx, const uint8_t *src, size_t len)
+{
+    (void)ctx;
+    if (g_io.tx_len + len <= sizeof(g_io.tx)) {
+        memcpy(g_io.tx + g_io.tx_len, src, len);
+        g_io.tx_len += len;
+    }
+    g_tx_hung = true;
+    return true;
+}
+
+static bool mock_busy_hung(void *ctx)
+{
+    (void)ctx;
+    return g_tx_hung;
+}
+
+/* RS-485 direction pin: records the level so a test can check the bus was released. */
+static bool g_de_asserted;
+
+static void mock_dir_tx(void *ctx, bool enable)
+{
+    (void)ctx;
+    g_de_asserted = enable;
+}
+
+/* Free blocks in the smallest tier, for the leak checks below. */
+static size_t after_free_probe(const nx_tiered_mem_pool_t *pool)
+{
+    nx_tiered_level_stat_t st;
+    assert(nx_tiered_mem_pool_get_tier_stat(pool, 0, &st) == NX_TIERED_OK);
+    return st.free_count;
+}
+
 /* Mock microsecond clock; the drive loop advances g_io.clock_us between calls.
  * A single system-wide time source takes no context. */
 static uint32_t mock_get_us(void)
@@ -364,6 +411,128 @@ int nx_modbus_rtu_slave_example_run(void)
      * have reached the valve queue, and had it been mistaken for unicast it would
      * have drawn a response. The exact-length match above proves neither happened. */
     printf("  OK: the broadcast frame was dropped silently (accept_broadcast = false)\n");
+
+    /* ---- a subscription without a queue is refused at init ----
+     * It would own an address range and then swallow every request in it. */
+    {
+        const nx_modbus_rtu_slave_sub_t bad[] = {
+            { NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 0x000F, NULL },
+        };
+        nx_modbus_rtu_slave_t     s2;
+        nx_modbus_rtu_slave_cfg_t c2 = cfg;
+        c2.subs       = bad;
+        c2.subs_count = 1;
+        assert(!nx_modbus_rtu_slave_init(&s2, &c2));
+        printf("  OK: init refuses a subscription with a NULL queue\n");
+    }
+
+    /* ---- every owner's queue full -> 0x06, not silence ----
+     * The valve queue holds 4. Feed 5 requests it owns without ever draining it: the
+     * fifth cannot be delivered, and a request the slave accepted as well-formed must
+     * not vanish - the master would have nothing to distinguish it from a lost frame. */
+    {
+        nx_modbus_rtu_slave_t s3;
+        assert(nx_modbus_rtu_slave_init(&s3, &cfg));
+
+        static uint8_t script[5u * 8u];
+        size_t         n = 0;
+        for (int k = 0; k < 5; k++) {
+            n += build_fixed_req(script + n, SLAVE_ADDR,
+                                 NX_MODBUS_FC_READ_HOLDING_REGS, 0x0001, 1);
+        }
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.rx     = script;
+        g_io.rx_len = n;
+        for (int k = 0; k < 12; k++) {          /* no business_serve: nothing drains q_valve */
+            nx_modbus_rtu_slave_process(&s3);
+            g_io.clock_us += 1000u;
+        }
+
+        assert(nx_queue_is_full(&q_valve));
+        assert(g_io.tx_len == 5u);              /* exactly one exception frame */
+        assert(g_io.tx[1] == (NX_MODBUS_FC_READ_HOLDING_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG));
+        assert(g_io.tx[2] == NX_MODBUS_EXC_SLAVE_DEVICE_BUSY);
+        assert(nx_modbus_rtu_check_crc(g_io.tx, 5u));
+        printf("  OK: a request no owner could queue drew exception 0x%02X\n",
+               NX_MODBUS_EXC_SLAVE_DEVICE_BUSY);
+
+        /* Drain what did land, then hand back everything the instance still holds. */
+        nx_ref_msg_t *m = NULL;
+        while (nx_queue_pop(&q_valve, &m) == NX_QUEUE_OK) {
+            nx_ref_msg_release(m);
+        }
+        nx_modbus_rtu_slave_deinit(&s3);
+    }
+
+    /* ---- deinit gives back the block of a frame caught mid-transmit ----
+     * A write that starts and never completes parks the TX state machine in TX_SENDING,
+     * where tx_cur holds a pool block. Re-initializing over that pointer without deinit
+     * would lose the block for good: nothing else in the library can reach it. */
+    {
+        nx_tiered_level_stat_t before, after;
+        assert(nx_tiered_mem_pool_get_tier_stat(&pool, 0, &before) == NX_TIERED_OK);
+
+        nx_modbus_rtu_slave_t     s4;
+        nx_modbus_rtu_slave_cfg_t c4 = cfg;
+        g_tx_hung  = false;
+        c4.write   = mock_write_hang;
+        c4.is_busy = mock_busy_hung;
+        assert(nx_modbus_rtu_slave_init(&s4, &c4));
+
+        static uint8_t script[8];
+        size_t         n = build_fixed_req(script, SLAVE_ADDR, NX_MODBUS_FC_READ_COILS, 0, 1);
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.rx     = script;
+        g_io.rx_len = n;
+        nx_modbus_rtu_slave_process(&s4);   /* unsupported func -> exception queued */
+        nx_modbus_rtu_slave_process(&s4);   /* picks it up, write starts, stays TX_SENDING */
+        nx_modbus_rtu_slave_process(&s4);   /* still busy: the frame is stuck in tx_cur */
+
+        assert(g_io.tx_len == 5u);                    /* the bytes were handed over */
+        assert(nx_queue_is_empty(&response_queue));   /* so it is not in the queue */
+        assert(after_free_probe(&pool) < before.free_count);   /* the slave holds it */
+
+        nx_modbus_rtu_slave_deinit(&s4);
+        assert(nx_tiered_mem_pool_get_tier_stat(&pool, 0, &after) == NX_TIERED_OK);
+        assert(after.free_count == before.free_count);
+        printf("  OK: deinit released the in-flight frame (%zu free blocks, unchanged)\n",
+               after.free_count);
+    }
+
+    /* ---- a write() that refuses the bytes releases the bus at once ----
+     * Nothing reached the wire, so there is no transmission to wait out. The direction
+     * pin must come back down in the same iteration: holding it asserted keeps this node
+     * driving an RS-485 segment it has nothing to send on, which blocks every other
+     * node. The frame is dropped and its block returned; the master retries. */
+    {
+        size_t before = after_free_probe(&pool);
+
+        nx_modbus_rtu_slave_t     s5;
+        nx_modbus_rtu_slave_cfg_t c5 = cfg;
+        c5.write  = mock_write_fail;
+        c5.dir_tx = mock_dir_tx;
+        g_de_asserted = false;
+        assert(nx_modbus_rtu_slave_init(&s5, &c5));
+
+        static uint8_t script[8];
+        size_t         n = build_fixed_req(script, SLAVE_ADDR, NX_MODBUS_FC_READ_COILS, 0, 1);
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.rx     = script;
+        g_io.rx_len = n;
+
+        /* One call is the whole story: rx queues the exception, tx picks it up and the
+         * write refuses it. The check lands here, before any further iteration could
+         * tidy up after the fact. */
+        nx_modbus_rtu_slave_process(&s5);
+
+        assert(!g_de_asserted);             /* bus released in that same iteration */
+        assert(g_io.tx_len == 0u);          /* the mock accepted nothing */
+        assert(nx_queue_is_empty(&response_queue));
+        assert(after_free_probe(&pool) == before);   /* block handed back */
+
+        nx_modbus_rtu_slave_deinit(&s5);
+        printf("  OK: a refused write released the bus and returned the frame's block\n");
+    }
 
     return 0;
 }

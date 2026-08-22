@@ -122,7 +122,10 @@ and it is driven from the main loop by a single `process()` call.
   inclusive address range)` in the subscription table; a matching request is fanned
   out zero-copy (as a reference-counted `nx_ref_msg`) to that module's queue. One
   function code can be split across modules by range, and one request can reach
-  several subscribers at once.
+  several subscribers at once. A full subscriber queue drops that copy; if *every*
+  matching subscriber refuses it, the request is answered `0x06` (slave device busy)
+  so the master knows to retry rather than being met with silence. A partial delivery
+  sends no exception — the request did take effect somewhere.
 - **Structural validation, in exception order** — before dispatch the slave settles
   what the frame alone determines: function support (`0x01`), then quantity /
   byte_count / single-write value legality (`0x03`), then address containment
@@ -141,7 +144,15 @@ and it is driven from the main loop by a single `process()` call.
   `get_us` skips the gap. The serial callbacks (`read` / `write` / `is_busy`) share
   `io_ctx`, which may stay NULL when the driver is a single module-owned instance;
   `dir_tx` takes its own `dir_ctx` (the DE pin is often a separate GPIO), and `get_us`
-  takes no context as a system-wide time source.
+  takes no context as a system-wide time source. A `write` that returns false has not
+  taken the bytes, so there is nothing to wait out: the frame is dropped and the
+  direction pin comes back down in the same iteration, leaving the segment free for
+  other nodes.
+- **Releasing an instance** — `nx_modbus_rtu_slave_deinit()` hands back the pool block
+  of a frame caught mid-transmit, deasserts the direction pin, and parks the state
+  machine idle. Call it before re-initializing an instance that has been running, and
+  when taking one out of service; the response queue is left alone, since the messages
+  in it belong to whoever pushed them.
 - **Reply helpers for business modules** — three builders cover every answer a module can
   give: `nx_modbus_rtu_slave_reply_read()` wraps the data it gathered behind a byte count,
   `nx_modbus_rtu_slave_reply_write()` builds the write confirmation that echoes the request,

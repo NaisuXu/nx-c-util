@@ -87,6 +87,12 @@ typedef enum {
  * A matched request is therefore well-formed; whether a value is operationally
  * acceptable for a given register is the owning business module's call, which may
  * emit its own exception response.
+ *
+ * A full @c queue drops that copy of the request. If every matching subscription
+ * refuses it, the request is answered with 0x06 (slave device busy), telling the
+ * master to retry. If some took it and others did not, no exception is sent: the
+ * request did take effect, and the master must not be told otherwise. Sizing each
+ * queue to the burst a module can fall behind by is what keeps this from happening.
  */
 typedef struct {
     uint8_t     func;      /**< Function code owned, e.g. NX_MODBUS_FC_READ_HOLDING_REGS */
@@ -128,7 +134,10 @@ typedef struct {
 
     /** Pull up to @p max received bytes into @p dst; return the count copied. */
     size_t (*read)(void *ctx, uint8_t *dst, size_t max);
-    /** Start transmitting @p len bytes from @p src (non-blocking). */
+    /** Start transmitting @p len bytes from @p src (non-blocking). Return true if the
+     *  bytes were accepted for sending. A false return drops that response frame and
+     *  releases the direction pin right away, rather than waiting out a transmission
+     *  that never started; the master retries. */
     bool   (*write)(void *ctx, const uint8_t *src, size_t len);
     /** Return true while the interface is busy transmitting: from the moment a
      *  @c write starts until the frame has fully left the wire. Gates both the end
@@ -171,14 +180,38 @@ typedef struct {
  * at least the shortest request plus one byte of slack for overflow detection
  * (>= sizeof(nx_modbus_rtu_req_fix_t) + 1).
  *
- * @param  s   Instance to initialize, must not be NULL.
+ * Every subscription must carry a @c queue: one without it would own an address range
+ * and then swallow every request in it, so it is rejected here rather than at runtime.
+ *
+ * To re-initialize an instance that has already been running, call
+ * nx_modbus_rtu_slave_deinit() first: a frame caught mid-transmit holds a pool block
+ * that only deinit can give back.
+ *
+ * @param  s   Instance to initialize, must not be NULL. Its previous contents are
+ *             never read, so it need not be zero-initialized.
  * @param  cfg Configuration, must not be NULL; @c pool, @c rx_buf, @c response_queue,
  *             @c read and @c write are required.
  *
  * @return true on success; false on any invalid argument (NULL required field,
- *         address out of 1..247, rx_size too small, subs NULL with subs_count > 0).
+ *         address out of 1..247, rx_size too small, subs NULL with subs_count > 0,
+ *         or a subscription with a NULL queue).
  */
 bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slave_cfg_t *cfg);
+
+/**
+ * @brief  Release what the instance still holds and park it idle.
+ *
+ * Gives back the pool block of a frame that was mid-transmit, deasserts the direction
+ * pin, and drops any partially received frame. The response queue is left alone: the
+ * messages still in it belong to whoever pushed them.
+ *
+ * Call this before re-initializing a running instance, and when taking it out of
+ * service. Safe to call on an instance that is already idle; not safe to call on one
+ * that was never initialized, since there is nothing to release.
+ *
+ * @param  s Instance; NULL is ignored.
+ */
+void nx_modbus_rtu_slave_deinit(nx_modbus_rtu_slave_t *s);
 
 /**
  * @brief  Drive the slave once; call this periodically from the main loop.

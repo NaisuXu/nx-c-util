@@ -180,12 +180,16 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
     uint32_t hi;
     request_span(cmd, frame, &lo, &hi);
 
-    nx_ref_msg_t *msg = NULL;
+    nx_ref_msg_t *msg       = NULL;
+    size_t        matched   = 0u;   /* subscriptions that own the span */
+    size_t        delivered = 0u;   /* of those, the ones that took the message */
+
     for (size_t i = 0; i < s->cfg.subs_count; i++) {
         const nx_modbus_rtu_slave_sub_t *sub = &s->cfg.subs[i];
         if (sub->func != cmd || lo < sub->addr_min || hi > sub->addr_max) {
             continue;
         }
+        matched++;
         if (msg == NULL) {
             msg = nx_ref_msg_alloc(s->cfg.pool, flen);
             if (msg == NULL) {
@@ -194,16 +198,25 @@ static void dispatch(nx_modbus_rtu_slave_t *s, const uint8_t *frame, size_t flen
             }
             memcpy(nx_ref_msg_data(msg), frame, flen);
         }
-        (void)nx_ref_msg_publish(msg, sub->queue);   /* full queue -> skipped */
+        if (nx_ref_msg_publish(msg, sub->queue) == NX_REF_MSG_OK) {
+            delivered++;
+        }
     }
 
     if (msg != NULL) {
         nx_ref_msg_release(msg);      /* drop producer ref; subscribers own it now */
-        return;
     }
 
-    /* Function supported and frame well-formed, but no subscriber owns the span. */
-    send_exception(s, frame, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
+    if (matched == 0u) {
+        /* Function supported and frame well-formed, but no subscriber owns the span. */
+        send_exception(s, frame, NX_MODBUS_EXC_ILLEGAL_DATA_ADDR);
+    } else if (delivered == 0u) {
+        /* Owned, but every owner's queue refused it: the request is valid and may
+         * succeed later, so ask the master to retry rather than staying silent.
+         * A partial delivery is not reported: some module did take the request, and
+         * an exception would tell the master the whole request had no effect. */
+        send_exception(s, frame, NX_MODBUS_EXC_SLAVE_DEVICE_BUSY);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -297,7 +310,18 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
         if (s->cfg.dir_tx != NULL) {
             s->cfg.dir_tx(s->cfg.dir_ctx, true);   /* drive the bus */
         }
-        (void)s->cfg.write(s->cfg.io_ctx, nx_ref_msg_data(msg), nx_ref_msg_len(msg));
+        if (!s->cfg.write(s->cfg.io_ctx, nx_ref_msg_data(msg), nx_ref_msg_len(msg))) {
+            /* The bytes were never accepted, so there is nothing to wait for: drop the
+             * frame and release the bus instead of timing the send of a frame that is
+             * not on the wire. The master retries. */
+            if (s->cfg.dir_tx != NULL) {
+                s->cfg.dir_tx(s->cfg.dir_ctx, false);
+            }
+            nx_ref_msg_release(msg);
+            s->run.tx_cur   = NULL;
+            s->run.tx_state = TX_IDLE;
+            break;
+        }
         s->run.tx_state = TX_SENDING;
         break;
     }
@@ -351,6 +375,12 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
     if (cfg->subs == NULL && cfg->subs_count != 0u) {
         return false;
     }
+    /* A subscription without a queue would silently swallow every request it owns. */
+    for (size_t i = 0; i < cfg->subs_count; i++) {
+        if (cfg->subs[i].queue == NULL) {
+            return false;
+        }
+    }
     if (cfg->rx_size < sizeof(nx_modbus_rtu_req_fix_t) + 1u) {
         return false;
     }
@@ -373,6 +403,25 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
     }
 
     return true;
+}
+
+void nx_modbus_rtu_slave_deinit(nx_modbus_rtu_slave_t *s)
+{
+    if (s == NULL) {
+        return;
+    }
+
+    /* A frame caught mid-transmit still holds a pool block; give it back. */
+    if (s->run.tx_cur != NULL) {
+        nx_ref_msg_release(s->run.tx_cur);
+        s->run.tx_cur = NULL;
+    }
+    if (s->cfg.dir_tx != NULL) {
+        s->cfg.dir_tx(s->cfg.dir_ctx, false);   /* leave the bus released */
+    }
+
+    s->run.rx_len   = 0u;
+    s->run.tx_state = TX_IDLE;
 }
 
 void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s)
