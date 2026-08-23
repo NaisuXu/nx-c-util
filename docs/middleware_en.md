@@ -456,3 +456,77 @@ for (;;) {
 > once handled; forgetting to is a pool leak, not a use-after-free, because the
 > block is only returned when the count reaches zero. Frames pushed to
 > `can_tx_queue` are likewise the driver's to release after transmitting.
+
+### nx_uds — ISO 14229 vocabulary
+
+The enums, masks and structures the diagnostic modules share: service and response
+identifiers, negative response codes, session types and the bitmask that names a set
+of them, the phases a service handler is called for, and the handler's own contract.
+Header-only, with no state and nothing to initialise.
+
+- **Service identifiers and their responses** — `nx_uds_sid_t` names the services,
+  `NX_UDS_SID_TO_POS_RSP()` and `NX_UDS_POS_RSP_TO_SID()` convert between a request
+  identifier and the positive response that answers it, and `NX_UDS_NEG_RSP_SID`
+  with `NX_UDS_NEG_RSP_LEN` describe the three-byte refusal.
+- **Response codes as an enum** — `nx_uds_nrc_t` covers the codes a server emits,
+  with `NX_UDS_NRC_NONE` naming the absence of one so a zeroed field means nothing
+  to report rather than code 0x00.
+- **Sessions as a bitmask** — a session's bit is its own value, so a service row
+  names the sessions it is available in with one `uint32_t`. `NX_UDS_SESSION_BIT()`
+  builds one, `NX_UDS_SESSION_MASK_ALL` and `NX_UDS_SESSION_MASK_NON_DEFAULT` cover
+  the common sets, and `NX_UDS_SESSION_MAX` bounds what a mask reaches.
+- **The suppression bit** — `NX_UDS_SUPPRESS_POS_RSP_BIT`,
+  `NX_UDS_SUPPRESSES_POS_RSP()` and `NX_UDS_SUB_FUNCTION()` read and strip bit 7 of
+  a sub-function byte, which asks for a positive response to go unsent.
+- **The handler contract** — `nx_uds_ctx_t` is a transaction as its handler sees it:
+  the request and its length, the sub-function with the suppression bit already
+  removed, the session and unlocked level it arrived in, a response buffer with the
+  response identifier already written, and a place to keep something across the
+  phases of one transaction. `nx_uds_phase_t` names why the handler is being called
+  and `nx_uds_disposition_t` what it decided.
+- **The service table row** — `nx_uds_service_t` describes one service as data: its
+  identifier, its handler, the sessions and security level it needs, the
+  sub-functions it has and optionally the sessions each of those is available in, and
+  the length window its requests fall in.
+
+```c
+#include "nx_uds.h"
+
+/* One service, described as data: read a data identifier, available in every
+ * session, needing no unlock, with no sub-function and a fixed request length. */
+static nx_uds_disposition_t read_did(nx_uds_ctx_t *ctx, void *user)
+{
+    (void)user;
+
+    if (ctx->phase != NX_UDS_PHASE_REQUEST) {
+        return NX_UDS_DISPOSITION_DONE;
+    }
+    /* out[0] already holds 0x62; append the identifier asked for and one byte. */
+    ctx->out[1]  = ctx->req[1];
+    ctx->out[2]  = ctx->req[2];
+    ctx->out[3]  = 0x5Au;
+    ctx->out_len = 4u;
+    return NX_UDS_DISPOSITION_DONE;
+}
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_READ_DATA_BY_IDENTIFIER,
+        .handler      = read_did,
+        .user         = NULL,
+        .flags        = 0u,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .sec_level    = 0u,
+        .min_len      = 3u,
+        .max_len      = 3u
+    }
+};
+```
+
+> **Note:** a session's bit is the session's own value, so a mask reaches
+> `NX_UDS_SESSION_MAX` and no further. The sessions ISO 14229 defines are all well
+> inside that, but the manufacturer and supplier ranges run to 0x7E and cannot be
+> named in a mask — `NX_UDS_SESSION_BIT()` yields no bit for them rather than
+> shifting by the width of the type, so a row listing one is a row no session
+> matches. A mask of 0 names no session at all and is refused at init, so a
+> zero-initialised row cannot be silently dead.

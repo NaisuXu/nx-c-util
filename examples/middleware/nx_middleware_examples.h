@@ -18,6 +18,27 @@ int nx_modbus_rtu_slave_example_run(void);
 /** Run the nx_can_isotp usage examples. Returns 0 on success, non-zero on failure. */
 int nx_can_isotp_example_run(void);
 
+/** Run the nx_uds_server usage examples. Returns 0 on success, non-zero on failure. */
+int nx_uds_server_example_run(void);
+
+/**
+ * @brief  Runs the always-needed-services example (0x10, 0x11, 0x3E, 0x27).
+ * @return 0 on success.
+ */
+int nx_uds_svc_example_run(void);
+
+/**
+ * @brief  Runs the memory transfer example (0x34, 0x35, 0x36, 0x37).
+ * @return 0 on success.
+ */
+int nx_uds_transfer_example_run(void);
+
+/**
+ * @brief  Runs the transport binding example: UDS over a real ISO-TP path.
+ * @return 0 on success.
+ */
+int nx_uds_tp_bind_example_run(void);
+
 #ifdef __cplusplus
 }
 #endif
