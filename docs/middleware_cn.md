@@ -60,10 +60,9 @@ txr.flags.bits.err_code = NX_CAN_ERR_ARB_LOST;
   / `rsp_fix_t` / `rsp_var_t`），以及异常响应（`nx_modbus_rtu_rsp_exc_t`）。功能码
   和异常码各有自己的枚举（`nx_modbus_fc_t`、`nx_modbus_exc_t`），它们与传输无关，
   可被未来的 TCP 模块共用。
-- **字节序辅助函数** —— 16 位字段（地址、数量、寄存器值）在线缆上是大端；用
-  `nx_modbus_rtu_get_u16` / `set_u16` 转换。尾部 CRC 是小端（低字节在前）。对于变长
-  帧，CRC 不是命名字段 —— `nx_modbus_rtu_req_var_crc` / `rsp_var_crc` 返回载荷之后
-  指向它的指针。
+- **线序** —— 16 位字段（地址、数量、寄存器值）在线缆上高位在前，按下面的代码那样重组。
+  尾部 CRC 是小端（低字节在前）。对于变长帧，CRC 不是命名字段 —— `nx_modbus_rtu_req_var_crc`
+  / `rsp_var_crc` 返回载荷之后指向它的指针。
 - **自包含的 CRC** —— `nx_modbus_rtu_crc16` 用一张 256 项的表计算 CRC-16/MODBUS
   （不依赖 `nx_crc`）；`nx_modbus_rtu_set_crc` 填充帧尾部的 CRC，
   `nx_modbus_rtu_check_crc` 校验收到的 CRC。两个帧辅助函数都要求长度至少为 5（最短的
@@ -79,19 +78,21 @@ uint8_t buf[8];
 nx_modbus_rtu_req_fix_t *req = (nx_modbus_rtu_req_fix_t *)buf;
 req->addr = 1u;
 req->cmd  = NX_MODBUS_FC_READ_HOLDING_REGS;
-nx_modbus_rtu_set_u16(&req->addr_h, 0x0000u);   /* starting address */
-nx_modbus_rtu_set_u16(&req->qty_h, 10u);        /* quantity         */
-nx_modbus_rtu_set_crc(buf, sizeof(buf));        /* fill crc_l / crc_h */
+req->addr_h = (uint8_t)(0x0000u >> 8);   /* 起始地址 */
+req->addr_l = (uint8_t)(0x0000u & 0xFFu);
+req->qty_h  = (uint8_t)(10u >> 8);       /* 数量     */
+req->qty_l  = (uint8_t)(10u & 0xFFu);
+nx_modbus_rtu_set_crc(buf, sizeof(buf));        /* 填 crc_l / crc_h */
 
-/* on a received frame, verify the CRC then read a 16-bit field */
+/* 收到帧后，先校验 CRC，再读某个 16 位字段 */
 if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
-    uint16_t qty = nx_modbus_rtu_get_u16(&req->qty_h);   /* 10 */
+    uint16_t qty = (uint16_t)(((uint16_t)req->qty_h << 8) | req->qty_l);   /* 10 */
     (void)qty;
 }
 ```
 
 > **注意：** 把字节缓冲强转为帧结构依赖于上面全 `uint8_t` 的布局；同样的布局也是没有
-> packing pragma 的原因。多字节字段仍需用 `get_u16` / `set_u16` 处理大端线序 —— 不要
+> packing pragma 的原因。多字节字段在线缆上高位在前 —— 不要
 > 把它们当作原生 `uint16_t` 读取。
 
 
@@ -169,6 +170,73 @@ for (;;) {
 > 业务模块仍需对被要求写入的实际值做范围检查，并可把自己的 `0x03` 异常推入响应队列。
 > 广播（地址 0）默认被丢弃，只处理点对点请求；配置 `accept_broadcast = true` 后广播
 > 会被分发，但从不应答 —— 不回响应，也不回异常。
+
+
+### nx_modbus_rtu_master —— 事件驱动的 RTU 主站：队列 → 线路 → 订阅分发
+
+建立在 `nx_modbus_rtu`（帧结构 + CRC）之上的链路/分发层。它把业务模块压入共享队列的请求帧
+发上线路，把回来的响应切片校验，再按响应来自哪个从站分发给拥有该设备的业务模块——自身不含
+任何业务逻辑。它不碰硬件：所有 I/O 以非阻塞回调注入，由主循环里的一次 `process()` 驱动。
+
+- **按从站地址分发** —— 业务模块拥有它对话的设备，所以订阅表的每一条认领一个 `slave_addr`，
+  该设备的响应以零拷贝的引用计数消息（`nx_ref_msg`）投递到它自己的队列。可选的 `func` 过滤器
+  用于两个模块按功能码拆分同一设备；`func = 0` 收下该地址的全部响应。一个响应可以同时到达
+  多个订阅者。无人认领的响应被丢弃——主站不作答，因此也没有什么可以拿来替代。
+- **超时归业务模块** —— 本模块只负责发送与分发，不记录哪些请求还在途中。需要知道"答复没来"的
+  模块自己记下发送时刻，并自行决定何时重试或放弃。响应队列为空只意味着答复还没到，不代表出错。
+- **请求构造器** —— 每个功能码一个（`nx_modbus_rtu_master_read_holding_regs`、
+  `..._write_multiple_regs` 等），负责建好帧、打上 CRC 并入队。它们只要池和请求队列，业务模块
+  无需持有主站句柄。协议不允许的一律当场拒绝——数量越界、字节数与数量不自洽、广播读——而不是
+  花一个往返去换回同样的结论。
+- **按长度切片** —— 每个响应的长度都由它自身的字节决定（异常 5 字节，写确认 8 字节，读响应
+  `3 + byte_count + 2`），所以 RX 不需要字符间隔（T3.5）定时器——在到达时序不可信的繁忙总线上
+  更稳。未收完的帧跨调用保留，收齐后才分发。遇到不支持的功能码或坏 CRC 时丢一个字节重同步。
+  TX 侧每帧之后插入由 `baud_rate` 导出的 3.5 字符间隔。
+- **一次调用推进一步** —— 每次 `process()` 只把发送路径推进一个状态，因此不会有哪一次调用把
+  多帧连续压上线路。提供 `is_busy` 时，在途的帧同时挡住下一次 `write()` 和方向引脚的释放，
+  这正是共享 RS-485 段不会被两帧同时驱动的原因。
+- **响应解析** —— 订阅者取到的是一整个 ADU，CRC 已经校验过。
+  `nx_modbus_rtu_master_rsp_is_exception()` 区分拒绝与答复并给出异常码；
+  `nx_modbus_rtu_master_rsp_data()` 定位读响应的载荷及其长度，返回指向消息内部的指针而非拷贝。
+- **释放实例** —— `nx_modbus_rtu_master_deinit()` 交还半途在发的帧所占的池块，拉低方向引脚，
+  丢弃未收完的响应。请求队列不动：里面的消息属于压入它们的人。
+
+```c
+#include "nx_modbus_rtu_master.h"
+
+/* 两个业务模块，各拥有一个设备 */
+const nx_modbus_rtu_master_sub_t subs[] = {
+    { 0x11u, 0u, &q_pump  },      /* 来自 0x11 的全部响应 */
+    { 0x22u, 0u, &q_meter },      /* 来自 0x22 的全部响应 */
+};
+
+nx_modbus_rtu_master_t     master;
+nx_modbus_rtu_master_cfg_t cfg = {
+    .baud_rate     = 115200u,        /* 导出 3.5 字符的 TX 间隔 */
+    .pool          = &pool,          /* 消息用的分级池 */
+    .rx_buf        = rx_buf,
+    .rx_size       = sizeof(rx_buf),
+    .subs          = subs,
+    .subs_count    = 2u,
+    .request_queue = &request_queue, /* 模块压进这里的会被发出去 */
+    .read          = uart_read,      /* 注入的非阻塞 I/O */
+    .write         = uart_write,
+    .get_us        = board_micros,   /* is_busy 为 NULL 表示 write 是阻塞的 */
+};
+nx_modbus_rtu_master_init(&master, &cfg);
+
+/* 某业务模块请求 10 个寄存器；答复会落到它自己的队列上 */
+nx_modbus_rtu_master_read_holding_regs(&pool, &request_queue, 0x11u, 0x0000u, 10u);
+
+for (;;) {
+    nx_modbus_rtu_master_process(&master);        /* TX 泵 + RX 分发 */
+    pump_business(&q_pump, &request_queue, &pool);   /* 排空收件箱，再次发问 */
+}
+```
+
+> **注意：** RTU 帧不带事务 ID，响应只能靠从站地址加功能码来对应请求。对同一从站发出两笔功能码
+> 相同的未完成请求时，回来的两个响应在帧层面无法区分谁对应谁——需要严格配对的模块应对每个从站
+> 一次只留一笔在途。对已经放弃的请求迟到的响应同理：它看起来和当前请求的答复完全一样。
 
 
 ### nx_tp_sdu —— 传输层服务数据单元

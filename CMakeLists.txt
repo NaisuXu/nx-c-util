@@ -29,6 +29,7 @@ set(NX_MIDDLEWARE_SOURCES
     src/middleware/nx_can_isotp.c
     src/middleware/nx_modbus_rtu.c
     src/middleware/nx_modbus_rtu_slave.c
+    src/middleware/nx_modbus_rtu_master.c
 )
 
 set(NX_DEVICE_SOURCES
@@ -69,6 +70,7 @@ add_executable(nx_device_examples
 add_executable(nx_middleware_examples
     examples/middleware/nx_middleware_examples.c
     examples/middleware/nx_modbus_rtu_slave_example.c
+    examples/middleware/nx_modbus_rtu_master_example.c
     examples/middleware/nx_can_isotp_example.c
     ${NX_MIDDLEWARE_SOURCES}
     ${NX_CORE_SOURCES}
