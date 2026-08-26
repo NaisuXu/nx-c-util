@@ -1,8 +1,9 @@
 # UDS 设计笔记
 
-**状态：** 设计阶段；尚未实现。
+**状态：** 服务器端已实现（`nx_uds_server`、`nx_uds_svc_std`、`nx_uds_svc_sec`、
+`nx_uds_svc_transfer`、`nx_uds_tp_bind`）。客户端和 Modbus 承载层仍是未来工作。
 
-**日期：** 2026-08-20
+**日期：** 2026-08-20；修订 2026-08-26。
 
 ## 背景
 
@@ -16,7 +17,7 @@
 
 1. `nx_tp_sdu_t` 上已有的字段（payload、`ta_type`、`link`、`result`）——这些是真实的 ISO 14229-2 A_PDU 服务接口参数。
 2. UDS 服务器配置中两个应用选定的容量数。
-3. 传输机制（pool、队列、ref-msg 协议）限定在 UDS 层下方的每条路径绑定 shim 中。
+3. 传输机制（pool、队列、ref-msg 协议）限定在 `nx_uds_tp_bind`，每条路径一个实例，位于 UDS 层下方。
 
 ## 架构
 
@@ -33,38 +34,37 @@ nx_uds_server / nx_uds_client
     | （无直接传输耦合）
     |
     v
-绑定 shim（每条路径，各约 30 行）
-  - nx_uds_port_isotp.c
-  - nx_uds_port_modbus.c
+nx_uds_tp_bind（每条路径一个实例，约 100 行）
     |
     | 通过 nx_queue_t（装 nx_ref_msg_t*）的 nx_tp_sdu_t
     v
-nx_can_isotp / nx_modbus_rtu_tp
+nx_can_isotp / nx_modbus_rtu_master
 ```
 
-绑定 shim 拥有：
-- 从传输层 TX 队列拉取 `nx_tp_sdu_t`
-- 调用 `nx_uds_server_indicate()` 或 `nx_uds_client_confirm()`
-- 从 pool 分配 + 将响应发布到传输层 RX 队列
-- 所有 ref-msg 和队列机制
+绑定拥有：
+- 从传输层出站队列拉取 `nx_tp_sdu_t`
+- 调用 `nx_uds_server_indicate()`
+- 从每条路径的 pool 分配 + 将响应发布到传输层入站队列
+- 传输层暂时无法接收的响应再次提供给传输层，而不是丢弃
 
 UDS 层只看到：
 - 携带请求字节 + 寻址 + 链路标识的 `indicate()` 调用
 - 用于发出响应的输出回调
-- 携带传输结果的 `confirm()` 调用
 
 ### 模块
 
 | 模块 | 类型 | 用途 |
 |------|------|------|
 | `nx_tp_sdu.h` | 纯头文件（结构体） | 传输 SDU：payload + `ta_type` + `link` + `kind` + `result` + `len` |
-| `nx_uds.h` | 纯头文件 | 词汇表：SID、NRC、会话掩码、`nx_uds_xfer_t` 状态 |
+| `nx_uds.h` | 纯头文件 | 词汇表：SID、NRC、会话掩码 |
 | `nx_uds_server.{h,c}` | 核心 | 表驱动服务器：服务分发、P2/P2*/P4 定时器、0x78 泵、NRC 归属 |
-| `nx_uds_transfer.{h,c}` | 服务族 | 0x34/0x35/0x36/0x37 handler（故意不叫 "download"——0x38 共享 0x36/0x37） |
-| `nx_modbus_rtu_tp.{h,c}` | 传输层 | Modbus 承载层：ADU ↔ `nx_tp_sdu_t`，轮询主从，在 collect 时 confirm |
+| `nx_uds_svc_std.{h,c}` | 服务族 | 始终需要的 handler：0x10、0x11、0x3E |
+| `nx_uds_svc_sec.{h,c}` | 服务族 | 0x27 SecurityAccess 种子/密钥交换 |
+| `nx_uds_svc_transfer.{h,c}` | 服务族 | 0x34/0x35/0x36/0x37 handler（故意不叫 "download"——0x38 共享 0x36/0x37） |
+| `nx_uds_tp_bind.{h,c}` | 绑定 | 每条路径一个实例：队列 + pool + 每条路径统计，把服务器接到某个传输层 |
+| `nx_can_isotp.{h,c}` | 传输层 | CAN 上的 ISO-TP 承载层，说 `nx_tp_sdu_t` |
+| `nx_modbus_rtu_master.{h,c}` | 传输层 | Modbus RTU 主站，请求/响应队列；不说 `nx_tp_sdu_t` —— Modbus 承载层（未来）包裹它 |
 | `nx_uds_client.{h,c}` | 核心 | 事务器：单事务引擎、从 confirm 算 P2、0x78 吸收、无表 |
-| `nx_uds_port_isotp.c` | Shim（示例） | 连接 `nx_can_isotp` ↔ `nx_uds_server` |
-| `nx_uds_port_modbus.c` | Shim（示例） | 连接 `nx_modbus_rtu_tp` ↔ `nx_uds_server` |
 
 客户端和服务器共享纯头文件词汇表，但零编译产物。
 
@@ -74,17 +74,23 @@ UDS 层只看到：
 
 ```c
 typedef struct {
-    uint8_t  sid;               /**< 服务标识符 */
-    uint8_t  flags;             /**< NX_UDS_SVC_* 标志 */
-    uint8_t  sec_level;         /**< 最低解锁安全等级（0 = 无限制） */
-    const uint8_t *subs;        /**< 允许的子功能（NULL = 任意） */
-    uint8_t  subs_count;        /**< subs 数组长度 */
-    uint8_t  session_mask;      /**< 此服务可用的会话位掩码 */
-    uint16_t min_len;           /**< 最小请求长度（含 SID） */
-    uint16_t max_len;           /**< 最大请求长度（0 = 无限制） */
-    uint32_t p4_us;             /**< 每服务 P4 上限（0 = 使用全局 cfg.p4_us） */
-    nx_uds_handler_fn handler;  /**< 服务 handler */
-    void    *user;              /**< 传给 handler 的不透明用户指针 */
+    uint8_t  sid;                 /**< 此行使之实现的服务标识符 */
+    uint8_t  flags;               /**< NX_UDS_SVC_* 标志，按位或 */
+    uint8_t  sec_level;           /**< 请求所需的安全等级；0 = 无 */
+    uint8_t  subs_count;          /**< @c subs 有多少项；0 = 接受任意 */
+    const uint8_t *subs;          /**< 接受的子功能，不含抑制位。NULL = 任意。 */
+    const uint32_t *sub_session_masks; /**< 每个 @c subs 项所在的会话，同序；
+                                        NULL 让每个子功能都跟本行自己的
+                                        @c session_mask。 */
+    uint32_t session_mask;        /**< 服务可用的会话；见 NX_UDS_SESSION_BIT。
+                                   0 不命名任何会话，init 时被拒绝。 */
+    uint16_t min_len;             /**< 此服务接受的最短请求 */
+    uint16_t max_len;             /**< 此服务接受的最长请求；0 = 无限制 */
+    uint32_t p4_us;               /**< 此服务总共可用的最长时间；0 = 用服务器的 */
+    uint8_t  max_pending;         /**< 放弃前的 pending 通知数；0 = 用服务器的 */
+    uint8_t  p4_nrc;              /**< 超过 P4 时答什么；0 = 用服务器默认 */
+    nx_uds_handler_fn handler;    /**< 什么实现此服务 */
+    void    *user;                /**< 原样传给 @c handler */
 } nx_uds_service_t;
 ```
 
@@ -100,7 +106,7 @@ typedef nx_uds_disposition_t (*nx_uds_handler_fn)(nx_uds_ctx_t *ctx, void *user)
 
 **添加一个服务**（例如 0x19 ReadDTCInformation）：
 1. 写 handler 函数：`nx_uds_disposition_t nx_uds_handle_read_dtc(nx_uds_ctx_t *ctx, void *user)`。
-2. 如果要复用就导出到头文件：`extern nx_uds_handler_fn nx_uds_svc_read_dtc;`。
+2. 如果要复用就导出到头文件：`extern nx_uds_handler_fn nx_uds_svc_std_read_dtc;`。
 3. 在应用的服务表中加一行，`sid=0x19`，适当的 flags/masks/lengths，`handler=nx_uds_handle_read_dtc`。
 4. `src/middleware/` 下没有文件被打开。
 
@@ -174,57 +180,46 @@ typedef struct {
 - **核心**（层自己发出这些）：0x11 `serviceNotSupported`、0x12 `sub-functionNotSupported`、0x7E `sub-functionNotSupportedInActiveSession`、0x13 `incorrectMessageLengthOrInvalidFormat`、0x14 `responseTooLong`、0x21 `busyRepeatRequest`（P4 超期默认）、0x33 `securityAccessDenied`、0x7F `serviceNotSupportedInActiveSession`、0x78 `requestCorrectlyReceived-ResponsePending`，以及 P4 超期时的 0x22 `conditionsNotCorrect`（如果服务表行指定了它）。
 - **Handler**（所有其他的，包括 0x22/0x24/0x31/0x35/0x36/0x72 在其域特定使用中）。
 
-### 绑定 Shim 示例（CAN 路径，示意性）
+### 绑定示例（CAN 路径，示意性）
+
+`nx_uds_tp_bind` 是传输补全层，每条路径写一次。它把服务器接到任何已经说 `nx_tp_sdu_t` 的传输层；这里就是 `nx_can_isotp`。队列以绑定的视角命名，这与传输层相反：传输层发布的，就是绑定读的。
 
 ```c
-/**
- * @file    nx_uds_port_isotp.c
- * @brief   连接 nx_can_isotp 到 nx_uds_server。
- *
- * 每条传输路径一个 shim，写一次。CAN 路径上约 30 行，因为
- * nx_can_isotp 已经说 ref-msg + queue 习语。
- */
+nx_uds_server_t    app_uds;
+nx_uds_tp_bind_t   app_uds_bind;
 
-void app_uds_pump_can(nx_uds_server_t *srv, nx_can_isotp_t *iso)
+void app_uds_boot(nx_can_isotp_t *iso)
 {
-    nx_ref_msg_t *m;
-    while (nx_queue_pop(iso->cfg.sdu_tx_queue, &m) == NX_QUEUE_OK) {
-        const nx_tp_sdu_t *s = (const nx_tp_sdu_t *)nx_ref_msg_data(m);
-        if (s->kind == NX_TP_SDU_INDICATION) {
-            nx_uds_server_indicate(srv, s->data, s->len, s->ta_type, s->link);
-        } else {  /* NX_TP_SDU_CONFIRM */
-            nx_uds_server_confirm(srv, s->link, s->result);
-        }
-        nx_ref_msg_release(m);
-    }
-    nx_uds_server_process(srv);   /* 驱动 0x78 泵，就绪时调用 out_fn */
+    nx_uds_server_init(&app_uds, &(nx_uds_server_cfg_t){
+        .services = app_svc_table, .services_count = APP_SVC_COUNT,
+        .req_buf  = app_req_buf,  .req_buf_size  = sizeof(app_req_buf),
+        .out_buf  = app_out_buf,  .out_buf_size  = sizeof(app_out_buf),
+        .link     = ISO_LINK,
+        .get_us   = app_get_us,
+    });
+
+    /* 绑定把自己装成服务器的输出路径，并拥有队列：
+     * sdu_in 是传输层发出的（到达的消息和发送结果），sdu_out 是传输层读的（要发的响应）。 */
+    nx_uds_tp_bind_init(&app_uds_bind, &(nx_uds_tp_bind_cfg_t){
+        .srv         = &app_uds,
+        .sdu_in      = iso->cfg.sdu_tx_queue,
+        .sdu_out     = iso->cfg.sdu_rx_queue,
+        .pool        = iso->cfg.pool,
+        .link        = ISO_LINK,
+        .max_sdu_len = 0,   /* 服务器产生什么就发布什么 */
+    });
 }
 
-/* 服务器的输出回调，在 init 时接线，分配 + 发布： */
-void app_uds_out_can(void *user, uint8_t link, const uint8_t *rsp,
-                     uint32_t len, nx_tp_ta_type_t ta_type)
+void app_uds_pump(void)
 {
-    app_ctx_t *app = (app_ctx_t *)user;
-    nx_can_isotp_t *iso = app->iso_can;   /* app 知道哪个链路是哪个 */
-    
-    nx_ref_msg_t *m = nx_ref_msg_alloc(iso->cfg.pool,
-                                       sizeof(nx_tp_sdu_t) + len);
-    if (m == NULL) { return; }   /* 分配失败时丢弃 */
-    
-    nx_tp_sdu_t *s = (nx_tp_sdu_t *)nx_ref_msg_data(m);
-    s->len     = len;
-    s->link    = link;
-    s->kind    = NX_TP_SDU_INDICATION;   /* 请求下行 */
-    s->ta_type = ta_type;
-    s->result  = NX_TP_N_OK;
-    memcpy(s->data, rsp, len);
-    
-    nx_ref_msg_publish(m, iso->cfg.sdu_rx_queue);
-    nx_ref_msg_release(m);   /* 生产者引用 */
+    /* 每次调用一条消息：服务器一次应答一个请求，排空队列只会产生一串拒绝。
+     * 服务器单独泵动；驱动什么、按什么顺序，是应用的决定。 */
+    nx_uds_tp_bind_process(&app_uds_bind);
+    nx_uds_server_process(&app_uds);
 }
 ```
 
-Modbus shim 类似长度；Modbus 传输以 ISO-TP 同样方式排队 SDU。
+`nx_can_isotp` 说 `nx_tp_sdu_t`，所以绑定直接把它接到服务器。Modbus 路径需要未来的 `nx_modbus_rtu_tp` 承载层先行——它会把 `nx_modbus_rtu_master` 包裹成 `nx_tp_sdu_t`，只有那之后绑定才在那里适用。
 
 ## 待定问题（真正的 UDS 层分叉）
 
@@ -271,15 +266,15 @@ Modbus shim 类似长度；Modbus 传输以 ISO-TP 同样方式排队 SDU。
 ## 实现增量
 
 1. **`nx_tp_sdu.h` 不变**（已出货）。
-2. **`nx_uds.h`** — 纯头文件词汇表：SID/NRC 枚举、会话掩码、`nx_uds_xfer_t`。
-3. **`nx_uds_server.{h,c}`** — 核心服务器，带 assert fixture，包括一个**敌对端口**（迟到 confirm、丢消息、发垃圾 SDU），证明层永不信任传输。
-4. **CAN 路径运行** — `nx_can_isotp` 不变，`examples/` 中一个绑定 shim 示例，你的 CAN 刷写工作。
-5. **`nx_uds_transfer.{h,c}`** — 0x34/0x35/0x36/0x37 handler。
-6. **`nx_modbus_rtu_tp.{h,c}`** — Modbus 承载层（ADU ↔ `nx_tp_sdu_t`）。
-7. **`nx_uds_client.{h,c}`** — 事务器。
-8. **`nx_modbus_rtu_master.{h,c}`** — 可选（如果你的 Modbus 路径当前没有 master 且需要一个）。
+2. **`nx_uds.h`** — 纯头文件词汇表：SID/NRC 枚举、会话掩码。*（已完成）*
+3. **`nx_uds_server.{h,c}`** — 核心服务器，带 assert fixture，包括一个**敌对端口**（迟到 confirm、丢消息、发垃圾 SDU），证明层永不信任传输。*（已完成，敌对端口 fixture 除外）*
+4. **CAN 路径运行** — `nx_can_isotp` 不变，`examples/` 中 `nx_uds_tp_bind` 绑定示例，你的 CAN 刷写工作。
+5. **`nx_uds_svc_transfer.{h,c}`** — 0x34/0x35/0x36/0x37 handler。*（已完成）*
+6. **`nx_modbus_rtu_tp.{h,c}`** — Modbus 承载层（ADU ↔ `nx_tp_sdu_t`）。*（未来）*
+7. **`nx_uds_client.{h,c}`** — 事务器。*（未来）*
+8. **`nx_modbus_rtu_master.{h,c}`** — 可选（如果你的 Modbus 路径当前没有 master 且需要一个）。*（已完成；它已经存在）*
 
-Modbus 承载层不阻塞任何东西；CAN 刷写在增量 4 工作。
+库自己的服务 handler（`nx_uds_svc_std`、`nx_uds_svc_sec`）已完成：0x10、0x11、0x3E、0x27。Modbus 承载层不阻塞任何东西；CAN 刷写在增量 4 工作。
 
 ## 关键陷阱
 
@@ -289,7 +284,7 @@ Modbus 承载层不阻塞任何东西；CAN 刷写在增量 4 工作。
 
 2. **S3 在接受 indication 时重启**，不是在组装响应时。慢 handler 不能让 S3 超期。
 
-3. **`nx_uds_server_process()` 每次调用必须恰好接受一个 indication**，不排空队列。不像 `nx_can_isotp_process()`（正确排空），UDS 服务器一次持有一个事务，接受第二个请求会中止第一个。
+3. **一次一个事务；第二个请求被拒绝，而不是排队。** 当事务正在运行时，`nx_uds_server_indicate()` 报告 `ERR_BUSY`，正在运行的那个被严格弃之不理。如何处理被拒绝的请求是调用者的决定——用 0x21 `busyRepeatRequest` 应答它请客户端重试；对功能寻址的请求，丢弃也是正确的。因此 `nx_uds_tp_bind_process()` 每次调用至多取一条消息，因为排空队列只会产生一串拒绝。
 
 4. **每条路径分开的 pool**。服务两个传输的一个共享 pool 是预算耗尽攻击：CAN 路径上的洪水会饿死 Modbus 路径的消息槽。
 
@@ -311,3 +306,4 @@ Modbus 承载层不阻塞任何东西；CAN 刷写在增量 4 工作。
 ## 修订历史
 
 - 2026-08-20：初始设计笔记。对抗性审查消除了 `nx_tp_port_t`；容量数重定位到 `nx_uds_server_cfg_t`；传输机制限定在绑定 shim。三个待定问题（session/security 作用域、DEFER、客户端架构）。
+- 2026-08-26：修订以匹配已出货的服务器端。每条路径的绑定 shim 变成了 `nx_uds_tp_bind`；模块表和绑定示例相应重写；陷阱 3 更正为实际的单事务 `ERR_BUSY` 行为。添加了 `nx_uds_svc_std` 和 `nx_uds_svc_sec`。客户端和 Modbus 承载层仍未定。

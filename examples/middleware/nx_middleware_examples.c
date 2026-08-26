@@ -6,9 +6,10 @@
  *   - nx_modbus_rtu_slave_example.c -> nx_modbus_rtu_slave_example_run()
  *   - nx_modbus_rtu_master_example.c -> nx_modbus_rtu_master_example_run()
  *   - nx_can_isotp_example.c        -> nx_can_isotp_example_run()
+ *   - nx_uds_client_example.c       -> nx_uds_client_example_run()
  *   - nx_uds_server_example.c       -> nx_uds_server_example_run()
- *   - nx_uds_svc_example.c          -> nx_uds_svc_example_run()
- *   - nx_uds_transfer_example.c     -> nx_uds_transfer_example_run()
+ *   - nx_uds_svc_std_example.c       -> nx_uds_svc_std_example_run()
+ *   - nx_uds_svc_transfer_example.c  -> nx_uds_svc_transfer_example_run()
  *   - nx_uds_tp_bind_example.c      -> nx_uds_tp_bind_example_run()
  */
 #include "nx_middleware_examples.h"
@@ -22,9 +23,10 @@ int main(void)
     rc |= nx_modbus_rtu_slave_example_run();
     rc |= nx_modbus_rtu_master_example_run();
     rc |= nx_can_isotp_example_run();
+    rc |= nx_uds_client_example_run();
     rc |= nx_uds_server_example_run();
-    rc |= nx_uds_svc_example_run();
-    rc |= nx_uds_transfer_example_run();
+    rc |= nx_uds_svc_std_example_run();
+    rc |= nx_uds_svc_transfer_example_run();
     rc |= nx_uds_tp_bind_example_run();
 
     return rc;

@@ -1,5 +1,5 @@
 /**
- * @file    nx_uds_transfer_example.c
+ * @file    nx_uds_svc_transfer_example.c
  * @brief   Exercises the memory transfer services: 0x34, 0x35, 0x36, 0x37.
  *
  * One server, a table of the four transfer handlers, and a small array standing in
@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "src/middleware/nx_uds_transfer.h"
+#include "src/middleware/nx_uds_svc_transfer.h"
 
 #define LINK_ID     1u
 #define P2_US       50000u
@@ -74,9 +74,9 @@ static bool     g_close_fails;
 static unsigned g_closes;
 
 static nx_uds_server_t g_srv;
-static nx_uds_xfer_t   g_xfer;
+static nx_uds_svc_transfer_t   g_xfer;
 
-static bool app_write(void *user, nx_uds_addr_t addr, const uint8_t *data,
+static bool app_write(void *user, nx_uds_svc_transfer_addr_t addr, const uint8_t *data,
                       uint32_t len, uint8_t *nrc)
 {
     (void)user;
@@ -91,7 +91,7 @@ static bool app_write(void *user, nx_uds_addr_t addr, const uint8_t *data,
     return true;
 }
 
-static bool app_read(void *user, nx_uds_addr_t addr, uint8_t *out, uint32_t len,
+static bool app_read(void *user, nx_uds_svc_transfer_addr_t addr, uint8_t *out, uint32_t len,
                      uint8_t *nrc)
 {
     (void)user; (void)nrc;
@@ -100,8 +100,8 @@ static bool app_read(void *user, nx_uds_addr_t addr, uint8_t *out, uint32_t len,
     return true;
 }
 
-static bool app_open(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t addr,
-                     nx_uds_addr_t size, uint8_t format, uint32_t *block_len,
+static bool app_open(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t addr,
+                     nx_uds_svc_transfer_addr_t size, uint8_t format, uint32_t *block_len,
                      uint8_t *nrc)
 {
     (void)user; (void)dir; (void)block_len;
@@ -119,8 +119,8 @@ static bool app_open(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t addr,
     return true;
 }
 
-static bool app_close(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t done,
-                      nx_uds_addr_t size, const uint8_t *record,
+static bool app_close(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t done,
+                      nx_uds_svc_transfer_addr_t size, const uint8_t *record,
                       uint32_t record_len, uint8_t *out, uint32_t out_cap,
                       uint32_t *out_len, uint8_t *nrc)
 {
@@ -143,12 +143,12 @@ static bool app_close(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t done,
 /* ---- the table ---- */
 static const nx_uds_service_t g_services[] = {
     {   .sid = NX_UDS_SID_REQUEST_DOWNLOAD,
-        .handler = nx_uds_svc_request_download, .user = &g_xfer,
+        .handler = nx_uds_svc_transfer_request_download, .user = &g_xfer,
         .flags = 0u, .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = NULL, .subs_count = 0u, .sub_session_masks = NULL,
         .min_len = 5u, .max_len = 33u },
     {   .sid = NX_UDS_SID_REQUEST_UPLOAD,
-        .handler = nx_uds_svc_request_upload, .user = &g_xfer,
+        .handler = nx_uds_svc_transfer_request_upload, .user = &g_xfer,
         .flags = 0u, .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = NULL, .subs_count = 0u, .sub_session_masks = NULL,
         .min_len = 5u, .max_len = 33u },
@@ -173,7 +173,7 @@ static uint8_t g_out_buf[64];
 static void setup(void)
 {
     nx_uds_server_cfg_t cfg;
-    nx_uds_xfer_cfg_t   xcfg;
+    nx_uds_svc_transfer_cfg_t   xcfg;
 
     g_now = 1000u;
     g_writes = 0u;
@@ -190,7 +190,7 @@ static void setup(void)
     xcfg.write_fn = app_write;
     xcfg.read_fn  = app_read;
     xcfg.close_fn = app_close;
-    assert(nx_uds_xfer_init(&g_xfer, &xcfg));
+    assert(nx_uds_svc_transfer_init(&g_xfer, &xcfg));
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.services       = g_services;
@@ -255,7 +255,7 @@ static void demo_download(void)
     assert(g_sent[0] == 0x74u && g_sent[1] == 0x10u && g_sent[2] == REQ_APDU);
     printf("  %-26s%u bytes, %u of payload\n", "block ->",
            (unsigned)g_sent[2],
-           (unsigned)nx_uds_xfer_payload_room(g_sent[2]));
+           (unsigned)nx_uds_svc_transfer_payload_room(g_sent[2]));
 
     printf("2. carrying the blocks\n");
     send_block(0x01u, 16u, 0x10u);
@@ -267,11 +267,11 @@ static void demo_download(void)
     assert(g_writes == 2u);
     /* The region is full: 32 bytes declared, 32 written. */
     {
-        nx_uds_addr_t done = 0u;
-        nx_uds_addr_t size = 0u;
+        nx_uds_svc_transfer_addr_t done = 0u;
+        nx_uds_svc_transfer_addr_t size = 0u;
 
-        assert(nx_uds_xfer_progress(&g_xfer, &done, &size)
-               == NX_UDS_XFER_DOWNLOAD);
+        assert(nx_uds_svc_transfer_progress(&g_xfer, &done, &size)
+               == NX_UDS_SVC_TRANSFER_DOWNLOAD);
         assert(done == 32u && size == 32u);
         printf("  %-26s%u of %u bytes\n", "progress ->", (unsigned)done,
                (unsigned)size);
@@ -287,7 +287,7 @@ static void demo_download(void)
         show("done ->");
         assert(g_sent_len == 2u && g_sent[0] == 0x77u && g_sent[1] == 32u);
         assert(g_closes == 1u);
-        assert(nx_uds_xfer_progress(&g_xfer, NULL, NULL) == NX_UDS_XFER_NONE);
+        assert(nx_uds_svc_transfer_progress(&g_xfer, NULL, NULL) == NX_UDS_SVC_TRANSFER_NONE);
     }
 }
 
@@ -306,9 +306,9 @@ static void demo_repeat(void)
     assert(g_writes == 1u);
     printf("  %-26sstill %u write\n", "writes ->", g_writes);
     {
-        nx_uds_addr_t done = 0u;
+        nx_uds_svc_transfer_addr_t done = 0u;
 
-        (void)nx_uds_xfer_progress(&g_xfer, &done, NULL);
+        (void)nx_uds_svc_transfer_progress(&g_xfer, &done, NULL);
         assert(done == 16u);
         printf("  %-26s%u bytes, not %u\n", "cursor ->", (unsigned)done, 32u);
     }
@@ -409,7 +409,7 @@ static void demo_refusals(void)
      * announcement follows it. A block sized to the link rather than to the
      * announcement is then well formed and larger than what was promised. */
     {
-        nx_uds_xfer_cfg_t xcfg;
+        nx_uds_svc_transfer_cfg_t xcfg;
 
         memset(&xcfg, 0, sizeof(xcfg));
         xcfg.srv           = &g_srv;
@@ -418,7 +418,7 @@ static void demo_refusals(void)
         xcfg.read_fn       = app_read;
         xcfg.close_fn      = app_close;
         xcfg.max_block_len = 10u;         /* 8 bytes of payload */
-        assert(nx_uds_xfer_init(&g_xfer, &xcfg));
+        assert(nx_uds_svc_transfer_init(&g_xfer, &xcfg));
     }
     submit(g_open_dl, sizeof(g_open_dl));
     show("announced ->");
@@ -513,14 +513,14 @@ static void demo_wrap(void)
     /* The region is larger than the memory behind it, so this transfer is opened
      * without the product's opinion: what is being watched is the counter. */
     {
-        nx_uds_xfer_cfg_t xcfg;
+        nx_uds_svc_transfer_cfg_t xcfg;
 
         memset(&xcfg, 0, sizeof(xcfg));
         xcfg.srv      = &g_srv;
         xcfg.open_fn  = NULL;
         xcfg.write_fn = app_write;
         xcfg.read_fn  = app_read;
-        assert(nx_uds_xfer_init(&g_xfer, &xcfg));
+        assert(nx_uds_svc_transfer_init(&g_xfer, &xcfg));
     }
     submit(open_small, sizeof(open_small));
     assert(g_sent[0] == 0x74u);
@@ -546,9 +546,9 @@ static void demo_wrap(void)
     assert(g_xfer.run.bsc_next == 0x01u);
 }
 
-int nx_uds_transfer_example_run(void)
+int nx_uds_svc_transfer_example_run(void)
 {
-    printf("=== nx_uds_transfer example ===\n");
+    printf("=== nx_uds_svc_transfer example ===\n");
 
     demo_download();
     demo_repeat();
@@ -556,7 +556,7 @@ int nx_uds_transfer_example_run(void)
     demo_upload();
     demo_wrap();
 
-    printf("nx_uds_transfer example passed\n\n");
+    printf("nx_uds_svc_transfer example passed\n\n");
     return 0;
 }
 

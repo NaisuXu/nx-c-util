@@ -1,8 +1,9 @@
 # UDS Design Notes
 
-**Status:** Design phase; not yet implemented.
+**Status:** Server side implemented (`nx_uds_server`, `nx_uds_svc_std`, `nx_uds_svc_sec`,
+`nx_uds_svc_transfer`, `nx_uds_tp_bind`). Client side and the Modbus carrier remain future work.
 
-**Date:** 2026-08-20
+**Date:** 2026-08-20; revised 2026-08-26.
 
 ## Context
 
@@ -16,7 +17,7 @@ This principle, applied rigorously through adversarial review, eliminates the or
 
 1. Fields already on `nx_tp_sdu_t` (payload, `ta_type`, `link`, `result`)—these are genuine ISO 14229-2 A_PDU service interface parameters.
 2. Two application-chosen capacity numbers in the UDS server configuration.
-3. Transport mechanics (pool, queues, ref-msg protocol) confined to per-path binding shims below the UDS layer.
+3. Transport mechanics (pool, queues, ref-msg protocol) confined to `nx_uds_tp_bind`, one instance per path, below the UDS layer.
 
 ## Architecture
 
@@ -33,38 +34,37 @@ nx_uds_server / nx_uds_client
     | (no direct transport coupling)
     |
     v
-Binding shim (per path, ~30 lines each)
-  - nx_uds_port_isotp.c
-  - nx_uds_port_modbus.c
+nx_uds_tp_bind (one instance per path, ~100 lines)
     |
     | nx_tp_sdu_t via nx_queue_t of nx_ref_msg_t*
     v
-nx_can_isotp / nx_modbus_rtu_tp
+nx_can_isotp / nx_modbus_rtu_master
 ```
 
-The binding shim owns:
-- Pulling `nx_tp_sdu_t` from the transport's TX queue
-- Calling `nx_uds_server_indicate()` or `nx_uds_client_confirm()`
-- Allocating from pool + publishing responses to the transport's RX queue
-- All ref-msg and queue mechanics
+The binding owns:
+- Pulling `nx_tp_sdu_t` from the transport's outbound queue
+- Calling `nx_uds_server_indicate()`
+- Allocating from a per-path pool + publishing responses to the transport's inbound queue
+- Offering a response the transport cannot take yet again, rather than dropping it
 
 The UDS layer sees only:
 - `indicate()` calls carrying request bytes + addressing + link identity
 - An output callback to emit responses
-- `confirm()` calls carrying transmission outcomes
 
 ### Modules
 
 | Module | Type | Purpose |
 |--------|------|---------|
 | `nx_tp_sdu.h` | Header-only (structs) | Transport SDU: payload + `ta_type` + `link` + `kind` + `result` + `len` |
-| `nx_uds.h` | Header-only | Vocabulary: SIDs, NRCs, session masks, `nx_uds_xfer_t` state |
+| `nx_uds.h` | Header-only | Vocabulary: SIDs, NRCs, session masks |
 | `nx_uds_server.{h,c}` | Core | Table-driven server: service dispatch, P2/P2*/P4 timers, 0x78 pump, NRC ownership |
-| `nx_uds_transfer.{h,c}` | Service family | 0x34/0x35/0x36/0x37 handlers (deliberately not "download"—0x38 shares 0x36/0x37) |
-| `nx_modbus_rtu_tp.{h,c}` | Transport | Modbus carrier: ADU ↔ `nx_tp_sdu_t`, polled master-slave, confirms at collect |
+| `nx_uds_svc_std.{h,c}` | Service family | The always-needed handlers: 0x10, 0x11, 0x3E |
+| `nx_uds_svc_sec.{h,c}` | Service family | 0x27 SecurityAccess seed/key exchange |
+| `nx_uds_svc_transfer.{h,c}` | Service family | 0x34/0x35/0x36/0x37 handlers (deliberately not "download"—0x38 shares 0x36/0x37) |
+| `nx_uds_tp_bind.{h,c}` | Binding | One instance per path: queues + pool + per-path stats, joins server to a transport |
+| `nx_can_isotp.{h,c}` | Transport | ISO-TP carrier for CAN, speaks `nx_tp_sdu_t` |
+| `nx_modbus_rtu_master.{h,c}` | Transport | Modbus RTU master, request/response queues; does not speak `nx_tp_sdu_t` — the Modbus carrier (future) wraps it |
 | `nx_uds_client.{h,c}` | Core | Transactor: one-transaction engine, P2 from confirm, 0x78 absorption, no table |
-| `nx_uds_port_isotp.c` | Shim (example) | Wires `nx_can_isotp` ↔ `nx_uds_server` |
-| `nx_uds_port_modbus.c` | Shim (example) | Wires `nx_modbus_rtu_tp` ↔ `nx_uds_server` |
 
 Client and server share header-only vocabulary but zero compiled artifacts.
 
@@ -74,17 +74,25 @@ The service set is **data, not code**: a caller-held `const nx_uds_service_t[]` 
 
 ```c
 typedef struct {
-    uint8_t  sid;               /**< Service identifier */
-    uint8_t  flags;             /**< NX_UDS_SVC_* flags */
-    uint8_t  sec_level;         /**< Minimum unlocked security level (0 = no restriction) */
-    const uint8_t *subs;        /**< Allowed sub-functions (NULL = any) */
-    uint8_t  subs_count;        /**< Length of subs array */
-    uint8_t  session_mask;      /**< Bitmask of sessions where this service is available */
-    uint16_t min_len;           /**< Minimum request length (SID inclusive) */
-    uint16_t max_len;           /**< Maximum request length (0 = no limit) */
-    uint32_t p4_us;             /**< Per-service P4 cap (0 = use global cfg.p4_us) */
-    nx_uds_handler_fn handler;  /**< Service handler */
-    void    *user;              /**< Opaque user pointer passed to handler */
+    uint8_t  sid;                 /**< The service identifier this row implements */
+    uint8_t  flags;               /**< NX_UDS_SVC_* flags, ORed together */
+    uint8_t  sec_level;           /**< Security level the request needs; 0 = none */
+    uint8_t  subs_count;          /**< How many entries @c subs has; 0 = accept any */
+    const uint8_t *subs;          /**< Sub-functions accepted, without the
+                                   suppression bit. NULL accepts any. */
+    const uint32_t *sub_session_masks; /**< Sessions per entry of @c subs, same order;
+                                        NULL makes every sub-function follow the
+                                        row's own @c session_mask. */
+    uint32_t session_mask;        /**< Sessions the service is available in; see
+                                   NX_UDS_SESSION_BIT. 0 names no session and is
+                                   refused at init. */
+    uint16_t min_len;             /**< Shortest request this service accepts */
+    uint16_t max_len;             /**< Longest request this service accepts; 0 = no limit */
+    uint32_t p4_us;               /**< Longest this service may take in total; 0 = server's */
+    uint8_t  max_pending;         /**< Pending notifications before giving up; 0 = server's */
+    uint8_t  p4_nrc;              /**< What to answer when past P4; 0 = server's default */
+    nx_uds_handler_fn handler;    /**< What implements the service */
+    void    *user;                /**< Passed to @c handler untouched */
 } nx_uds_service_t;
 ```
 
@@ -100,7 +108,7 @@ Dispositions: `DONE`, `PENDING` (layer re-enters next `process()`, emits NRC 0x7
 
 **Adding a service** (e.g. 0x19 ReadDTCInformation):
 1. Write the handler function: `nx_uds_disposition_t nx_uds_handle_read_dtc(nx_uds_ctx_t *ctx, void *user)`.
-2. Export it in a header if it will be reused: `extern nx_uds_handler_fn nx_uds_svc_read_dtc;`.
+2. Export it in a header if it will be reused: `extern nx_uds_handler_fn nx_uds_svc_std_read_dtc;`.
 3. Add one row to the application's service table with `sid=0x19`, appropriate flags/masks/lengths, and `handler=nx_uds_handle_read_dtc`.
 4. No file under `src/middleware/` is opened.
 
@@ -175,57 +183,53 @@ A carrier serving UDS:
 - **Core** (the layer emits these itself): 0x11 `serviceNotSupported`, 0x12 `sub-functionNotSupported`, 0x7E `sub-functionNotSupportedInActiveSession`, 0x13 `incorrectMessageLengthOrInvalidFormat`, 0x14 `responseTooLong`, 0x21 `busyRepeatRequest` (default on P4 expiry), 0x33 `securityAccessDenied`, 0x7F `serviceNotSupportedInActiveSession`, 0x78 `requestCorrectlyReceived-ResponsePending`, and 0x22 `conditionsNotCorrect` on P4 expiry (if the service table row specifies it).
 - **Handler** (all others, including 0x22/0x24/0x31/0x35/0x36/0x72 in their domain-specific uses).
 
-### Binding Shim Example (CAN path, illustrative)
+### Binding Example (CAN path, illustrative)
+
+`nx_uds_tp_bind` is the transport-completion layer, written once per path. It joins
+the server to whatever transport already speaks `nx_tp_sdu_t`; here that is
+`nx_can_isotp`. The queues are named from the bind's point of view, which is the
+opposite of the transport's: what the transport publishes is what the bind reads.
 
 ```c
-/**
- * @file    nx_uds_port_isotp.c
- * @brief   Wires nx_can_isotp to nx_uds_server.
- *
- * One shim per transport path, written once. ~30 lines on the CAN path because
- * nx_can_isotp already speaks the ref-msg + queue idiom.
- */
+nx_uds_server_t    app_uds;
+nx_uds_tp_bind_t   app_uds_bind;
 
-void app_uds_pump_can(nx_uds_server_t *srv, nx_can_isotp_t *iso)
+void app_uds_boot(nx_can_isotp_t *iso)
 {
-    nx_ref_msg_t *m;
-    while (nx_queue_pop(iso->cfg.sdu_tx_queue, &m) == NX_QUEUE_OK) {
-        const nx_tp_sdu_t *s = (const nx_tp_sdu_t *)nx_ref_msg_data(m);
-        if (s->kind == NX_TP_SDU_INDICATION) {
-            nx_uds_server_indicate(srv, s->data, s->len, s->ta_type, s->link);
-        } else {  /* NX_TP_SDU_CONFIRM */
-            nx_uds_server_confirm(srv, s->link, s->result);
-        }
-        nx_ref_msg_release(m);
-    }
-    nx_uds_server_process(srv);   /* drives 0x78 pump, calls out_fn when ready */
+    nx_uds_server_init(&app_uds, &(nx_uds_server_cfg_t){
+        .services = app_svc_table, .services_count = APP_SVC_COUNT,
+        .req_buf  = app_req_buf,  .req_buf_size  = sizeof(app_req_buf),
+        .out_buf  = app_out_buf,  .out_buf_size  = sizeof(app_out_buf),
+        .link     = ISO_LINK,
+        .get_us   = app_get_us,
+    });
+
+    /* The bind installs itself as the server's output path and owns the queues:
+     * sdu_in is what the transport put out (arrivals and send outcomes), sdu_out
+     * is what the transport reads (responses to send). */
+    nx_uds_tp_bind_init(&app_uds_bind, &(nx_uds_tp_bind_cfg_t){
+        .srv         = &app_uds,
+        .sdu_in      = iso->cfg.sdu_tx_queue,
+        .sdu_out     = iso->cfg.sdu_rx_queue,
+        .pool        = iso->cfg.pool,
+        .link        = ISO_LINK,
+        .max_sdu_len = 0,   /* publish whatever the server produces */
+    });
 }
 
-/* The server's output callback, wired at init, allocs + publishes: */
-void app_uds_out_can(void *user, uint8_t link, const uint8_t *rsp,
-                     uint32_t len, nx_tp_ta_type_t ta_type)
+void app_uds_pump(void)
 {
-    app_ctx_t *app = (app_ctx_t *)user;
-    nx_can_isotp_t *iso = app->iso_can;   /* app knows which link is which */
-    
-    nx_ref_msg_t *m = nx_ref_msg_alloc(iso->cfg.pool,
-                                       sizeof(nx_tp_sdu_t) + len);
-    if (m == NULL) { return; }   /* drop on alloc failure */
-    
-    nx_tp_sdu_t *s = (nx_tp_sdu_t *)nx_ref_msg_data(m);
-    s->len     = len;
-    s->link    = link;
-    s->kind    = NX_TP_SDU_INDICATION;   /* request going down */
-    s->ta_type = ta_type;
-    s->result  = NX_TP_N_OK;
-    memcpy(s->data, rsp, len);
-    
-    nx_ref_msg_publish(m, iso->cfg.sdu_rx_queue);
-    nx_ref_msg_release(m);   /* producer reference */
+    /* One message per pass: a server answers one request at a time, so draining
+     * the queue would only produce a run of refusals. The server is pumped
+     * separately; what to drive, and in what order, is the application's call. */
+    nx_uds_tp_bind_process(&app_uds_bind);
+    nx_uds_server_process(&app_uds);
 }
 ```
 
-The Modbus shim is similar length; the Modbus transport queues SDUs the same way ISO-TP does.
+`nx_can_isotp` speaks `nx_tp_sdu_t`, so the bind joins the server to it directly. The
+Modbus path needs the future `nx_modbus_rtu_tp` carrier first — it will wrap
+`nx_modbus_rtu_master` in `nx_tp_sdu_t`, and only then does a binding apply there.
 
 ## Open Questions (genuine UDS-layer forks)
 
@@ -272,15 +276,15 @@ Is the client driven by the same `const` service table as the server (table-driv
 ## Implementation Increments
 
 1. **`nx_tp_sdu.h` unchanged** (already shipped).
-2. **`nx_uds.h`** — header-only vocabulary: SID/NRC enums, session masks, `nx_uds_xfer_t`.
-3. **`nx_uds_server.{h,c}`** — core server with assert fixture including a **hostile port** (confirms late, drops messages, emits garbage SDUs) proving the layer never trusts the transport.
-4. **CAN path runs** — `nx_can_isotp` unchanged, one binding shim example in `examples/`, owner's CAN flashing works.
-5. **`nx_uds_transfer.{h,c}`** — 0x34/0x35/0x36/0x37 handlers.
-6. **`nx_modbus_rtu_tp.{h,c}`** — Modbus carrier (ADU ↔ `nx_tp_sdu_t`).
-7. **`nx_uds_client.{h,c}`** — transactor.
-8. **`nx_modbus_rtu_master.{h,c}`** — optional (if the owner's Modbus path currently has no master and needs one).
+2. **`nx_uds.h`** — header-only vocabulary: SID/NRC enums, session masks. *(done)*
+3. **`nx_uds_server.{h,c}`** — core server with assert fixture including a **hostile port** (confirms late, drops messages, emits garbage SDUs) proving the layer never trusts the transport. *(done, minus the hostile-port fixture)*
+4. **CAN path runs** — `nx_can_isotp` unchanged, `nx_uds_tp_bind` binding example in `examples/`, owner's CAN flashing works.
+5. **`nx_uds_svc_transfer.{h,c}`** — 0x34/0x35/0x36/0x37 handlers. *(done)*
+6. **`nx_modbus_rtu_tp.{h,c}`** — Modbus carrier (ADU ↔ `nx_tp_sdu_t`). *(future)*
+7. **`nx_uds_client.{h,c}`** — transactor. *(future)*
+8. **`nx_modbus_rtu_master.{h,c}`** — optional (if the owner's Modbus path currently has no master and needs one). *(done; it already exists)*
 
-The Modbus carrier blocks nothing; CAN flashing is working at increment 4.
+The library's own service handlers (`nx_uds_svc_std`, `nx_uds_svc_sec`) are done: 0x10, 0x11, 0x3E, and 0x27. The Modbus carrier blocks nothing; CAN flashing is working at increment 4.
 
 ## Key Traps
 
@@ -290,7 +294,7 @@ These are load-bearing correctness constraints surfaced during design review:
 
 2. **S3 restarts on accepting an indication**, not on assembling a response. A slow handler cannot let S3 expire.
 
-3. **`nx_uds_server_process()` must accept exactly one indication per call**, not drain the queue. Unlike `nx_can_isotp_process()` (which correctly drains), the UDS server holds one transaction at a time, and accepting a second request aborts the first.
+3. **One transaction at a time; a second request is refused, not queued.** `nx_uds_server_indicate()` reports `ERR_BUSY` when a transaction is running, and the running one is left strictly alone. It is the caller's decision what to do with the refused request — answering it with 0x21 `busyRepeatRequest` asks the client to retry; dropping it is right for a request that was functionally addressed. `nx_uds_tp_bind_process()` accordingly takes at most one message per call, because draining the queue would only produce a run of refusals.
 
 4. **Separate pools per path**. One shared pool serving two transports is a budget-exhaustion attack: a flood on the CAN path starves the Modbus path of message slots.
 
@@ -312,3 +316,4 @@ These are load-bearing correctness constraints surfaced during design review:
 ## Revision History
 
 - 2026-08-20: Initial design notes. Adversarial review eliminated `nx_tp_port_t`; capacity numbers relocated to `nx_uds_server_cfg_t`; transport mechanics confined to binding shims. Three open questions remain (session/security scope, DEFER, client architecture).
+- 2026-08-26: Revised to match the shipped server side. The per-path binding shims became `nx_uds_tp_bind`; the module table and binding example rewritten accordingly; Trap 3 corrected to the actual one-transaction `ERR_BUSY` behavior. `nx_uds_svc_std` and `nx_uds_svc_sec` added. Client side and Modbus carrier remain open.

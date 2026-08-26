@@ -30,10 +30,11 @@ set(NX_MIDDLEWARE_SOURCES
     src/middleware/nx_modbus_rtu.c
     src/middleware/nx_modbus_rtu_slave.c
     src/middleware/nx_modbus_rtu_master.c
+    src/middleware/nx_uds_client.c
     src/middleware/nx_uds_server.c
-    src/middleware/nx_uds_svc.c
-    src/middleware/nx_uds_sec.c
-    src/middleware/nx_uds_transfer.c
+    src/middleware/nx_uds_svc_std.c
+    src/middleware/nx_uds_svc_sec.c
+    src/middleware/nx_uds_svc_transfer.c
     src/middleware/nx_uds_tp_bind.c
 )
 
@@ -77,9 +78,10 @@ add_executable(nx_middleware_examples
     examples/middleware/nx_modbus_rtu_slave_example.c
     examples/middleware/nx_modbus_rtu_master_example.c
     examples/middleware/nx_can_isotp_example.c
+    examples/middleware/nx_uds_client_example.c
     examples/middleware/nx_uds_server_example.c
-    examples/middleware/nx_uds_svc_example.c
-    examples/middleware/nx_uds_transfer_example.c
+    examples/middleware/nx_uds_svc_std_example.c
+    examples/middleware/nx_uds_svc_transfer_example.c
     examples/middleware/nx_uds_tp_bind_example.c
     ${NX_MIDDLEWARE_SOURCES}
     ${NX_CORE_SOURCES}

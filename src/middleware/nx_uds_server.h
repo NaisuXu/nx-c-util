@@ -69,16 +69,6 @@ typedef enum {
 #define NX_UDS_SERVER_DEFAULT_MAX_PENDING  32u
 
 /**
- * @brief  How the session parameters are scaled in a 0x10 positive response.
- *
- * The response reports the two timing values the client is to use, and they are
- * not in the same unit: P2 is in milliseconds and P2* in tens of milliseconds,
- * both as 16-bit big-endian values.
- */
-#define NX_UDS_P2_RESOLUTION_US            1000u
-#define NX_UDS_P2_STAR_RESOLUTION_US       10000u
-
-/**
  * @brief  Hand a finished response to whatever is carrying this conversation.
  *
  * Called from process() with a complete response A_PDU. The bytes belong to the

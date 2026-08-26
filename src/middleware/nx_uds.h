@@ -372,6 +372,19 @@ typedef struct {
     void    *user;           /**< Passed to @c handler untouched */
 } nx_uds_service_t;
 
+/* ===================================================================== */
+/* 0x10 timing scales                                                    */
+/* ===================================================================== */
+/**
+ * @brief  How the session parameters are scaled in a 0x10 positive response.
+ *
+ * The response reports the two timing values the client is to use, and they are
+ * not in the same unit: P2 is in milliseconds and P2* in tens of milliseconds,
+ * both as 16-bit big-endian values.
+ */
+#define NX_UDS_P2_RESOLUTION_US            1000u
+#define NX_UDS_P2_STAR_RESOLUTION_US       10000u
+
 #ifdef __cplusplus
 }
 #endif

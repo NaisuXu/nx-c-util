@@ -1,10 +1,10 @@
 /**
- * @file    nx_uds_sec.c
+ * @file    nx_uds_svc_sec.c
  * @brief   Implementation of the 0x27 seed/key exchange.
  */
 #include <string.h>
 
-#include "nx_uds_sec.h"
+#include "nx_uds_svc_sec.h"
 
 /** @brief Length of the answer to a key: the identifier and the echo, nothing more. */
 #define SEC_KEY_RSP_LEN 2u
@@ -32,7 +32,7 @@ static bool sec_reached(uint32_t now, uint32_t deadline)
  */
 static uint8_t sec_level_of(uint8_t sub)
 {
-    if (sub == 0u || sub > NX_UDS_SEC_KEY_SUB(NX_UDS_SEC_MAX_LEVEL)) {
+    if (sub == 0u || sub > NX_UDS_SVC_SEC_KEY_SUB(NX_UDS_SVC_SEC_MAX_LEVEL)) {
         return 0u;
     }
     return (uint8_t)((sub + 1u) / 2u);
@@ -55,7 +55,7 @@ static bool sec_is_seed_request(uint8_t sub)
  * @param  level Level number.
  * @return The entry describing it.
  */
-static const nx_uds_sec_level_t *sec_find_level(const nx_uds_sec_t *sec,
+static const nx_uds_svc_sec_level_t *sec_find_level(const nx_uds_svc_sec_t *sec,
                                                uint8_t level)
 {
     uint8_t i;
@@ -71,7 +71,7 @@ static const nx_uds_sec_level_t *sec_find_level(const nx_uds_sec_t *sec,
 /* ------------------------------------------------------------------ */
 /* Setting up                                                        */
 /* ------------------------------------------------------------------ */
-bool nx_uds_sec_init(nx_uds_sec_t *sec, const nx_uds_sec_cfg_t *cfg)
+bool nx_uds_svc_sec_init(nx_uds_svc_sec_t *sec, const nx_uds_svc_sec_cfg_t *cfg)
 {
     uint8_t i;
     uint8_t j;
@@ -86,9 +86,9 @@ bool nx_uds_sec_init(nx_uds_sec_t *sec, const nx_uds_sec_cfg_t *cfg)
     }
 
     for (i = 0u; i < cfg->levels_count; i++) {
-        const nx_uds_sec_level_t *lv = &cfg->levels[i];
+        const nx_uds_svc_sec_level_t *lv = &cfg->levels[i];
 
-        if (lv->level == 0u || lv->level > NX_UDS_SEC_MAX_LEVEL) {
+        if (lv->level == 0u || lv->level > NX_UDS_SVC_SEC_MAX_LEVEL) {
             return false;    /* no pair of sub-functions names it */
         }
         if (lv->seed_len == 0u || lv->key_len == 0u) {
@@ -109,15 +109,15 @@ bool nx_uds_sec_init(nx_uds_sec_t *sec, const nx_uds_sec_cfg_t *cfg)
     memset(sec, 0, sizeof(*sec));
     sec->cfg = *cfg;
     if (sec->cfg.max_attempts == 0u) {
-        sec->cfg.max_attempts = NX_UDS_SEC_DEFAULT_ATTEMPTS;
+        sec->cfg.max_attempts = NX_UDS_SVC_SEC_DEFAULT_ATTEMPTS;
     }
     if (sec->cfg.delay_us == 0u) {
-        sec->cfg.delay_us = NX_UDS_SEC_DEFAULT_DELAY_US;
+        sec->cfg.delay_us = NX_UDS_SVC_SEC_DEFAULT_DELAY_US;
     }
     return true;
 }
 
-void nx_uds_sec_get_lockout(const nx_uds_sec_t *sec, uint8_t *attempts,
+void nx_uds_svc_sec_get_lockout(const nx_uds_svc_sec_t *sec, uint8_t *attempts,
                             bool *waiting, uint32_t *remaining)
 {
     if (sec == NULL) {
@@ -143,7 +143,7 @@ void nx_uds_sec_get_lockout(const nx_uds_sec_t *sec, uint8_t *attempts,
     }
 }
 
-bool nx_uds_sec_set_lockout(nx_uds_sec_t *sec, uint8_t attempts, bool waiting,
+bool nx_uds_svc_sec_set_lockout(nx_uds_svc_sec_t *sec, uint8_t attempts, bool waiting,
                             uint32_t remaining)
 {
     if (sec == NULL) {
@@ -175,8 +175,8 @@ bool nx_uds_sec_set_lockout(nx_uds_sec_t *sec, uint8_t attempts, bool waiting,
  * @param  level Its number.
  * @return What to do with the request.
  */
-static nx_uds_disposition_t sec_do_seed(nx_uds_sec_t *sec, nx_uds_ctx_t *ctx,
-                                        const nx_uds_sec_level_t *lv,
+static nx_uds_disposition_t sec_do_seed(nx_uds_svc_sec_t *sec, nx_uds_ctx_t *ctx,
+                                        const nx_uds_svc_sec_level_t *lv,
                                         uint8_t level)
 {
     uint32_t seed_len = 0u;
@@ -244,8 +244,8 @@ static nx_uds_disposition_t sec_do_seed(nx_uds_sec_t *sec, nx_uds_ctx_t *ctx,
  * @param  level Its number.
  * @return What to do with the request.
  */
-static nx_uds_disposition_t sec_do_key(nx_uds_sec_t *sec, nx_uds_ctx_t *ctx,
-                                       const nx_uds_sec_level_t *lv,
+static nx_uds_disposition_t sec_do_key(nx_uds_svc_sec_t *sec, nx_uds_ctx_t *ctx,
+                                       const nx_uds_svc_sec_level_t *lv,
                                        uint8_t level)
 {
     /* A key means something only against a seed this level is waiting on. Offered
@@ -312,8 +312,8 @@ static nx_uds_disposition_t sec_do_key(nx_uds_sec_t *sec, nx_uds_ctx_t *ctx,
 /* ------------------------------------------------------------------ */
 nx_uds_disposition_t nx_uds_svc_security_access(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_sec_t *sec = (nx_uds_sec_t *)user;
-    const nx_uds_sec_level_t *lv;
+    nx_uds_svc_sec_t *sec = (nx_uds_svc_sec_t *)user;
+    const nx_uds_svc_sec_level_t *lv;
     uint8_t level;
 
     if (sec == NULL || sec->cfg.srv == NULL) {

@@ -617,3 +617,582 @@ static const nx_uds_service_t services[] = {
 > shifting by the width of the type, so a row listing one is a row no session
 > matches. A mask of 0 names no session at all and is refused at init, so a
 > zero-initialised row cannot be silently dead.
+
+### nx_uds_server — ISO 14229 diagnostic server (ECU side)
+
+The ECU side of an ISO 14229 conversation: it takes a request A_PDU, finds the
+service that implements it, and produces the response A_PDU. What carried the
+request is not known to this module — a request enters through
+`nx_uds_server_indicate()` as plain bytes plus how it was addressed, and a
+response leaves through a callback the application wires to whatever it is
+speaking over. Each instance serves one conversation.
+
+What the server owns is what every service shares. The set of services is the
+application's, held as a table of `nx_uds_service_t` rows; a service is added by
+writing a handler and adding a row, and nothing in this module is edited. On top
+of that dispatch the server owns the session and the S3 timer that drops it, the
+response timing ISO 14229-2 prescribes, the pending notification that extends a
+slow transaction, and the negative responses that belong to no service.
+
+- **One transaction at a time** — a request is accepted, run to its response, and
+  only then is the next one taken. `nx_uds_server_indicate()` reports `ERR_BUSY`
+  rather than starting a second, and a handler that needs several cycles keeps the
+  transaction until it is finished.
+- **Response timing driven from the config** — the server holds itself to P2, P2*
+  and P4, all in microseconds, emits the pending notification that keeps the
+  client waiting past P2, and gives the transaction up (with the configured
+  `p4_nrc`) on whichever of P4 or `max_pending` is reached first.
+- **The session as a resource** — the server tracks the active session and the
+  unlocked security level, drops a non-default session after `s3_us` of quiet, and
+  restarts that timer on every request it accepts.
+- **Caller-provided buffers only** — the request is copied into `req_buf` for as
+  long as its transaction runs, and the response is assembled in `out_buf`; a
+  handler that must span several cycles reads the one buffer and writes the other.
+  Nothing is allocated.
+- **A request that matches no service still gets an answer** — it starts a
+  transaction that produces a negative response, so the refusal is sent the same
+  way a positive one is.
+
+The server exposes the pieces a service needs to speak to it: `_session` and
+`_sec_level` report the state a request arrived in, `_set_session` and
+`_set_sec_level` change it, `_touch` restarts the quiet timer, `_timing`, `_now`
+and `_apdu_limits` publish what the server holds itself to, and `_is_busy` asks
+whether a transaction is running.
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+
+static bool send_response(void *user, uint8_t link, const uint8_t *rsp,
+                          uint32_t len, uint8_t ta_type)
+{
+    (void)user; (void)link; (void)ta_type;
+    return can_send(myself, rsp, len);   /* queued, or false to retry later */
+}
+
+static nx_uds_disposition_t read_did(nx_uds_ctx_t *ctx, void *user)
+{
+    (void)user;
+
+    if (ctx->phase != NX_UDS_PHASE_REQUEST) {
+        return NX_UDS_DISPOSITION_DONE;
+    }
+    ctx->out[1] = ctx->req[1];   /* the identifier asked for */
+    ctx->out[2] = ctx->req[2];
+    ctx->out[3] = 0x5Au;         /* one byte of data */
+    ctx->out_len = 4u;
+    return NX_UDS_DISPOSITION_DONE;
+}
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_READ_DATA_BY_IDENTIFIER,
+        .handler      = read_did,
+        .flags        = 0u,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .min_len      = 3u,
+        .max_len      = 3u
+    }
+};
+
+static uint32_t board_micros(void) { return timer_read_us(); }
+
+static nx_uds_server_t srv;
+static uint8_t req_buf[64];
+static uint8_t out_buf[64];
+
+static void server_setup(void)
+{
+    nx_uds_server_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.services       = services;
+    cfg.services_count = 1u;
+    cfg.out_fn         = send_response;
+    cfg.req_buf        = req_buf;
+    cfg.req_buf_size   = sizeof(req_buf);
+    cfg.out_buf        = out_buf;
+    cfg.out_buf_size   = sizeof(out_buf);
+    cfg.max_req_apdu   = sizeof(req_buf);
+    cfg.get_us         = board_micros;
+
+    nx_uds_server_init(&srv, &cfg);
+}
+```
+
+> **Note:** a request that arrives while a transaction is running is refused with
+> `ERR_BUSY` and the running transaction is left strictly alone. The alternative —
+> cancelling what is running to take the newcomer — loses the work in progress to
+> any request at all, including a broadcast TesterPresent that was never addressed
+> to this server in particular. The caller decides what to do with the refused
+> request: answering it with 0x21 asks the client to send it again, and dropping
+> it is also correct for one that was functionally addressed.
+
+### nx_uds_svc_std — the always-needed service handlers
+
+The three services a diagnostic server is expected to answer whatever else it
+implements: 0x10 DiagnosticSessionControl, 0x11 ECUReset and 0x3E TesterPresent.
+Each is an ordinary handler occupying an ordinary service table row, wired into a
+table alongside the application's own services and reached the same way. Each
+takes its own configuration struct through the row's `user` pointer, and nothing
+here keeps state of its own.
+
+- **0x10 SessionControl** — answers with the session echoed back and the response
+  windows P2 and P2*, then enters the session once that answer has reached the
+  client. The windows are read from the server rather than configured here, so
+  what is announced is what is enforced. Entering a session relocks security,
+  whichever session is entered.
+- **0x11 ECUReset** — answers with the reset type echoed back, and 0x04
+  additionally with the power-down time it was configured with, then performs the
+  reset once that answer has reached the client. A reset carried out before its
+  answer is sent looks to a client like a server that rebooted on its own.
+- **0x3E TesterPresent** — echoes the sub-function and does nothing else; the
+  server restarts its quiet timer on any request it accepts, and the service is
+  what a client with nothing to ask sends to keep the session.
+
+Each handler publishes what its row must declare, since a row that declares
+something else is not corrected: a length bound the service does not expect, or a
+sub-function list naming what the product cannot do, produces a server that
+answers wrongly rather than one that refuses to start.
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_std.h"
+
+static nx_uds_server_t srv;
+
+static bool allow_session(void *user, uint8_t from, uint8_t to, uint8_t *nrc)
+{
+    (void)user; (void)from; (void)to; (void)nrc;
+    return !driving_now();          /* refuse programming while driving */
+}
+
+static nx_uds_svc_std_session_cfg_t session_cfg = {
+    .srv      = &srv,
+    .allow_fn = allow_session,
+};
+
+static void do_reset(void *user, uint8_t reset_type)
+{
+    (void)user;
+    if (reset_type == NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN) {
+        power_down_requested = true;      /* 0x04 records, rather than resetting */
+    } else {
+        board_reset(reset_type);
+    }
+}
+
+static nx_uds_svc_std_reset_cfg_t reset_cfg = {
+    .do_fn           = do_reset,
+    .power_down_time = 0xFEu,            /* no power-down time available */
+};
+
+static const uint8_t sessions[] = {
+    NX_UDS_SESSION_DEFAULT, NX_UDS_SESSION_PROGRAMMING, NX_UDS_SESSION_EXTENDED,
+};
+static const uint8_t resets[] = {
+    NX_UDS_RESET_HARD, NX_UDS_RESET_KEY_OFF_ON, NX_UDS_RESET_SOFT,
+    NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN,
+};
+static const uint8_t tester_present_sub = NX_UDS_SVC_STD_TESTER_PRESENT_SUB;
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
+        .handler      = nx_uds_svc_std_session_control,
+        .user         = &session_cfg,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = sessions,
+        .subs_count   = 3u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+    {
+        .sid          = NX_UDS_SID_ECU_RESET,
+        .handler      = nx_uds_svc_std_ecu_reset,
+        .user         = &reset_cfg,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = resets,
+        .subs_count   = 4u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+    {
+        .sid          = NX_UDS_SID_TESTER_PRESENT,
+        .handler      = nx_uds_svc_std_tester_present,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = &tester_present_sub,
+        .subs_count   = 1u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+};
+```
+
+> **Note:** 0x10 and 0x11 act in the CONFIRM/SILENCE phase rather than when they
+> produce the answer, so the change or the reset happens only once the client has
+> been told the request was accepted. What acts on a request at that point asks
+> whether the response in the buffer is this service's positive one, so a refusal
+> cannot be mistaken for the acceptance it replaced. A request whose positive
+> response was suppressed is still acted on (at the point the answer would have
+> been sent); a request whose answer never reached the link is not.
+
+### nx_uds_svc_sec — 0x27 seed/key exchange
+
+The seed/key exchange that unlocks a security level. Each level is a pair of
+sub-functions — an odd one asking for a seed, the even one after it presenting a
+key — and a level unlocked is what a service row's `sec_level` names. The
+algorithm is not here: the application produces the seed and judges the key
+through two callbacks, and this module never sees a secret or invents a random
+number. What it owns is the sequence and the guessing defence.
+
+- **The pair is in the level** — level *n* is sub-functions `NX_UDS_SVC_SEC_SEED_SUB(n)`
+  and `NX_UDS_SVC_SEC_KEY_SUB(n)`, so level 1 is 0x01/0x02, level 2 is 0x03/0x04, up
+  to `NX_UDS_SVC_SEC_MAX_LEVEL`. A level absent from the levels list does not exist.
+- **Fixed byte counts per level** — each level declares how long its seed and its
+  key are. The seed answer is exactly that long whether the seed was computed or
+  the level was already unlocked; a key must be exactly the declared length.
+- **A seed is spent once judged** — the same key cannot be presented twice, and a
+  wrong key spends the seed so a second attempt starts by asking for a new one.
+- **The waiting period** — a wrong key counts as an attempt; when the count reaches
+  `max_attempts` the module starts a period of `delay_us` in which every 0x27
+  request is refused with 0x37 without a callback being consulted. The count and
+  the period outlast both a session change and a relock, and the pair
+  `nx_uds_svc_sec_get_lockout()` / `nx_uds_svc_sec_set_lockout()` stores them somewhere
+  that survives a power cycle.
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_sec.h"
+
+static nx_uds_server_t srv;
+
+static bool make_seed(void *user, uint8_t level, const uint8_t *record,
+                      uint32_t record_len, uint8_t *seed, uint32_t seed_cap,
+                      uint32_t *seed_len)
+{
+    (void)user; (void)level; (void)record; (void)record_len;
+    (void)seed_cap;
+    seed[0] = random_byte();
+    *seed_len = 1u;
+    return true;
+}
+
+static bool judge_key(void *user, uint8_t level, const uint8_t *seed,
+                      uint32_t seed_len, const uint8_t *key, uint32_t key_len)
+{
+    (void)user;
+    return level == 1u && seed_len == 1u && key_len == 1u
+           && key[0] == (uint8_t)(seed[0] ^ 0x5Au);   /* just an example */
+}
+
+static const nx_uds_svc_sec_level_t levels[] = {
+    { .level = 1u, .seed_len = 1u, .key_len = 1u },
+};
+
+static uint8_t seed_buf[4];
+
+static nx_uds_svc_sec_t sec;
+static void sec_setup(void)
+{
+    nx_uds_svc_sec_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv          = &srv;
+    cfg.levels       = levels;
+    cfg.levels_count = 1u;
+    cfg.seed_fn      = make_seed;
+    cfg.verify_fn    = judge_key;
+    cfg.seed_buf     = seed_buf;
+    cfg.seed_buf_size = sizeof(seed_buf);
+
+    nx_uds_svc_sec_init(&sec, &cfg);
+}
+```
+
+> **Note:** a wrong key is counted as an attempt only when the request it arrived
+> in was the right shape. A key presented with no seed outstanding is answered with
+> 0x24 (request out of sequence) and not counted, and a seed a client asked not to
+> be told is not issued — there is nothing to count against. The count is across
+> every level together, so a client working through levels one at a time is one
+> client, and reaching the limit is what starts the waiting period.
+
+### nx_uds_svc_transfer — moving a block of memory
+
+The memory transfer services: 0x34 RequestDownload, 0x35 RequestUpload, 0x36
+TransferData and 0x37 RequestTransferExit. Four handlers occupying four ordinary
+service table rows, plus the state one transfer needs — which direction it runs
+in, the region it covers, how far it has got, and which block is expected next.
+The memory is not here: the application reads and writes it through two
+callbacks, and this module never touches an address itself.
+
+- **Open, carry, close** — a transfer is opened by 0x34 (the client writes memory)
+  or 0x35 (the client reads it), carried by any number of 0x36 exchanges, and
+  closed by 0x37. One runs at a time, and an open finished only when the whole
+  declared region has moved.
+- **The block length is announced** — the open answers with the length of one
+  block, counted as the whole message rather than its payload alone, and drawn
+  from what the server can carry. `nx_uds_svc_transfer_payload_room()` subtracts the two
+  bytes of overhead the counter and identifier occupy.
+- **A block arriving twice is not carried twice** — the same counter as the last
+  committed block is answered again, from the same place at the same length, so a
+  lost answer is recoverable rather than a doubled write. A counter that is
+  neither the next nor the last is refused, and the transfer is left open for the
+  client to try again.
+- **The last block of an upload is short** — the server reads whatever is left of
+  the declared region, and a download that would write past the end the client
+  itself declared is refused.
+- **Finishing is the application's say** — 0x37 calls the close callback before its
+  answer is assembled, which is where a written image gets verified or a partition
+  marked valid. It leaves the session, the unlocked level and the quiet timer
+  alone: a client commonly runs several transfers in one session.
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_transfer.h"
+
+static nx_uds_server_t srv;
+
+static bool open_transfer(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t addr,
+                          nx_uds_svc_transfer_addr_t size, uint8_t format, uint32_t *block_len,
+                          uint8_t *nrc)
+{
+    (void)user; (void)format; (void)block_len; (void)nrc;
+    return (dir == NX_UDS_SVC_TRANSFER_DOWNLOAD) && addr == FLASH_BASE && size > 0u;
+}
+
+static bool write_block(void *user, nx_uds_svc_transfer_addr_t addr, const uint8_t *data,
+                        uint32_t len, uint8_t *nrc)
+{
+    (void)user; (void)addr; (void)data; (void)len; (void)nrc;
+    return true;    /* flash_write_buffered(addr, data, len); */
+}
+
+static bool read_block(void *user, nx_uds_svc_transfer_addr_t addr, uint8_t *out,
+                       uint32_t len, uint8_t *nrc)
+{
+    (void)user; (void)addr; (void)out; (void)len; (void)nrc;
+    return true;    /* flash_read(addr, out, len); */
+}
+
+static bool close_transfer(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t done,
+                           nx_uds_svc_transfer_addr_t size, const uint8_t *record,
+                           uint32_t record_len, uint8_t *out, uint32_t out_cap,
+                           uint32_t *out_len, uint8_t *nrc)
+{
+    (void)user; (void)dir; (void)done; (void)size; (void)record;
+    (void)record_len; (void)out; (void)out_cap; (void)out_len; (void)nrc;
+    return flash_checksum_ok();
+}
+
+static nx_uds_svc_transfer_t xfer;
+static void xfer_setup(void)
+{
+    nx_uds_svc_transfer_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv           = &srv;
+    cfg.open_fn       = open_transfer;
+    cfg.write_fn      = write_block;
+    cfg.read_fn       = read_block;
+    cfg.close_fn      = close_transfer;
+    cfg.max_block_len = FLASH_WRITE_UNIT;
+
+    nx_uds_svc_transfer_init(&xfer, &cfg);
+}
+
+/* Four rows carry the transfer; each has the same handle as user. */
+static const nx_uds_service_t services[] = {
+    { .sid = NX_UDS_SID_REQUEST_DOWNLOAD,  .handler = nx_uds_svc_transfer_request_download,
+      .user = &xfer, .min_len = 5u, .max_len = 33u },
+    { .sid = NX_UDS_SID_REQUEST_UPLOAD,    .handler = nx_uds_svc_transfer_request_upload,
+      .user = &xfer, .min_len = 5u, .max_len = 33u },
+    { .sid = NX_UDS_SID_TRANSFER_DATA,     .handler = nx_uds_svc_transfer_data,
+      .user = &xfer, .min_len = 2u, .max_len = 0u },
+    { .sid = NX_UDS_SID_REQUEST_TRANSFER_EXIT,
+      .handler = nx_uds_svc_transfer_exit, .user = &xfer,
+      .min_len = 1u, .max_len = 0u },
+};
+```
+
+> **Note:** the byte after the 0x36 identifier is a block sequence counter, not a
+> sub-function. The row must NOT declare `NX_UDS_SVC_HAS_SUB_FUNCTION`, since
+> reading that byte's top bit as a request for silence would answer half of every
+> transfer with nothing. The row's `max_len` is 0 — the real ceiling is the length
+> that was announced, and a block over it is refused as out of range rather than
+> as the wrong length.
+
+### nx_uds_tp_bind — joining the server to a transport
+
+The few dozen lines between a diagnostic server and a transport that speaks
+`nx_tp_sdu_t`. A transport publishes what it received, and what it finished
+sending, as reference-counted messages on a queue, and reads what it should send
+from another; this module is what moves those messages in and out of the server.
+It is transport-agnostic — the two queues and the pool are all it sees, so the
+same code joins the server to any transport that fills an `nx_tp_sdu_t`. One
+instance per path.
+
+- **The mechanics that are easy to get wrong by hand** — a received message is
+  released as soon as the server has copied it, a response the transport cannot
+  take yet is left for the server to offer again rather than dropped, a request
+  arriving while one is already being answered keeps the session alive instead of
+  letting it lapse, and every response published is addressed to the one client
+  that is owed it rather than to the whole link.
+- **One step per pass** — `nx_uds_tp_bind_process()` takes at most one message off
+  the inbound queue, because a server answers one request at a time and a second
+  would be refused rather than queued. The server is not pumped here; what to
+  drive, and in what order, is the application's to arrange.
+- **A pool of its own** — the pool is per path, not shared, so a flood on one path
+  cannot starve another.
+- **What was lost is counted** — the stats report every message that was discarded
+  rather than answered, so a path whose counters climb is failing quietly.
+
+The binding installs itself as the server's output path, so the server's own
+`out_fn` and `out_user` are overwritten. Initialise the server first, then bind it.
+
+```c
+#include "nx_queue.h"
+#include "nx_ref_msg.h"
+#include "nx_tiered_mem_pool.h"
+#include "nx_tp_sdu.h"
+#include "nx_uds_server.h"
+#include "nx_uds_tp_bind.h"
+
+static nx_uds_server_t srv;
+static nx_tiered_mem_pool_t pool;
+static nx_queue_t sdu_in_q, sdu_out_q;
+
+static nx_uds_tp_bind_t bind;
+static void bind_setup(void)
+{
+    nx_uds_tp_bind_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv         = &srv;
+    cfg.sdu_in      = &sdu_in_q;   /* what the transport published */
+    cfg.sdu_out     = &sdu_out_q;  /* what the transport reads to send */
+    cfg.pool        = &pool;
+    cfg.link        = 1u;
+    cfg.max_sdu_len = 4096u;
+
+    nx_uds_tp_bind_init(&bind, &cfg);
+}
+```
+
+> **Note:** a response is always physically addressed, however the request came
+> in. A transport reads the `ta_type` off a message it is asked to send to select
+> the CAN identifier, so propagating the request's functional addressing would put
+> the response on the address a broadcast arrived on — which on an ECU is 0, the
+> address nobody listens to. The binding writes `NX_TP_TA_PHYSICAL` into every
+> outbound response for exactly that reason.
+
+### nx_uds_client — ISO 14229 diagnostic client (the test tool side)
+
+The other half of an ISO 14229 conversation: it takes a request A_PDU and reports
+the outcome — the response A_PDU that came back, or why none did. What carries the
+request is not known to this module; a request leaves through a callback the
+application wires to whatever it is speaking over, and a response enters through
+`nx_uds_client_indicate()` as plain bytes plus how it was addressed. Each instance
+runs one transaction at a time, so the client is a test tool that asks and waits
+rather than a peer that streams.
+
+A transaction is a question and the wait for its answer. The client offers the
+request to the send path, waits P2 for a response, and if the server says the
+answer is still coming — a negative response carrying 0x78 responsePending — waits
+P2* and keeps going, up to a bounded number of extensions. The wait windows are the
+server's to set: a 0x10 positive response publishes P2 and P2*, and the client
+adopts them for the conversation unless it is configured with `fixed_timing`, in
+which case it always uses its own values.
+
+- **One transaction at a time** — a request is armed, run to its outcome, and only
+  then is the next one taken. `nx_uds_client_request()` reports `ERR_BUSY` while a
+  transaction is in flight.
+- **The outcome is reported, not just the bytes** — the result callback names how
+  the transaction ended: a positive response, a refusal, a protocol error, a
+  timeout, a cancellation, or silence where the request had asked for no positive
+  response at all (the only silence that is not a failure).
+- **The send path answers back** — what the carrier does with the request is
+  reported through `nx_uds_client_confirm()`, so the client hears immediately if a
+  request never got onto the link instead of waiting out the response window. And
+  where the carrier cannot take a request yet, the client offers the same one again
+  on the next pass rather than dropping it — but only until `send_timeout_us`.
+- **Timing the server sets** — the wait windows are the published values unless
+  `fixed_timing` is set, so the client times out when the server says the response
+  is late, not when the application guessed it would be.
+- **Caller-provided buffers only** — the request in flight is kept in `req_buf` and
+  the response that arrived is kept in `rsp_buf`, both caller-owned. Nothing is
+  allocated.
+
+The client exposes the state the application needs to drive a session:
+`_is_busy` asks whether a conversation is running, `_session` reports the active
+session, `_timing` reports the wait windows in use, and `_set_send` lets a binding
+attach itself as the send path after the client is initialised.
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_client.h"
+
+static bool send_request(void *user, uint8_t link, const uint8_t *req,
+                         uint32_t len, uint8_t ta_type)
+{
+    (void)user; (void)link; (void)ta_type;
+    return can_send(myself, req, len);   /* queued, or false to retry later */
+}
+
+static void report(void *user, nx_uds_client_t *clt, nx_uds_client_result_t result)
+{
+    (void)user;
+    const uint8_t *rsp = clt->cfg.rsp_buf;
+    uint32_t len = nx_uds_client_resp_len(clt);
+    if (result == NX_UDS_CLIENT_RESULT_NEGATIVE) {
+        reason_code = rsp[2];            /* the NRC that refused the request */
+    }
+}
+
+static uint32_t board_micros(void) { return timer_read_us(); }
+
+static nx_uds_client_t clt;
+static uint8_t req_buf[16];
+static uint8_t rsp_buf[64];
+
+static void client_setup(void)
+{
+    nx_uds_client_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.result_fn     = report;
+    cfg.send_fn       = send_request;
+    cfg.req_buf       = req_buf;
+    cfg.req_buf_size  = sizeof(req_buf);
+    cfg.rsp_buf       = rsp_buf;
+    cfg.rsp_buf_size  = sizeof(rsp_buf);
+    cfg.link          = 1u;
+    cfg.get_us        = board_micros;
+
+    nx_uds_client_init(&clt, &cfg);
+}
+
+static void ask_session(void)
+{
+    /* 0x10 0x00, physically addressed: what session is this ECU in? */
+    nx_uds_client_request(&clt, NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL, 0x00u, NULL, 0u,
+                          NX_TP_TA_PHYSICAL);
+    while (nx_uds_client_is_busy(&clt)) {
+        nx_uds_client_process(&clt);   /* every main-loop iteration */
+    }
+}
+```
+
+> **Note:** `nx_uds_client_request()` does not send anything. It arms the request
+> and the first `nx_uds_client_process()` call offers it to the send path, so
+> calling `request()` and immediately reading `rsp_buf` will always see zero bytes.
+> The send path taking the request also does not mean the transaction is shipping —
+> it is over only when the outcome fires, which for most signals is in the result
+> callback, and a request that asks for silence resolves without ever placing a
+> response in the buffer.

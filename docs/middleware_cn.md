@@ -437,3 +437,568 @@ for (;;) {
 > 会拿走它，其余实例根本看不到。因此仍要给每个实例各配一个接收队列，或在驱动层先做分流。从 `sdu_tx_queue` 取出的每个对象都是消费者持有的一个引用，处理完
 > 必须调用 `nx_ref_msg_release()`；漏掉它造成的是内存池泄漏而非释放后使用，因为只有引用
 > 计数归零时块才会被归还。推入 `can_tx_queue` 的帧同理，由驱动在发送完成后释放。
+
+### nx_uds —— ISO 14229 词汇表
+
+诊断模块共享的枚举、掩码与结构体：服务标识符与正响应标识符、负响应码、会话类型及其位掩码、
+服务处理器被调用的相位，以及处理器本身的契约。纯头文件，无状态，无需初始化。
+
+- **服务标识符及其正响应** —— `nx_uds_sid_t` 列出各服务；`NX_UDS_SID_TO_POS_RSP()` 与
+  `NX_UDS_POS_RSP_TO_SID()` 在请求标识符与应答它的正响应标识符之间换算；
+  `NX_UDS_NEG_RSP_SID` 与 `NX_UDS_NEG_RSP_LEN` 描述三字节的负响应。
+- **响应码为枚举** —— `nx_uds_nrc_t` 覆盖服务器会发出的各码位，其中 `NX_UDS_NRC_NONE`
+  表示"没有码"，这样零值字段表示无事可报，而不是码 0x00。
+- **会话用位掩码表示** —— 会话的位就是它自身的值，因此服务行用单个 `uint32_t` 命名它
+  可用的各会话。`NX_UDS_SESSION_BIT()` 构造一位，`NX_UDS_SESSION_MASK_ALL` 与
+  `NX_UDS_SESSION_MASK_NON_DEFAULT` 覆盖常见集合，`NX_UDS_SESSION_MAX` 界定掩码所能触及的范围。
+- **抑制位** —— `NX_UDS_SUPPRESS_POS_RSP_BIT`、`NX_UDS_SUPPRESSES_POS_RSP()` 与
+  `NX_UDS_SUB_FUNCTION()` 读取并剥离子功能字节的第 7 位，该位要求正响应不被发送。
+- **处理器契约** —— `nx_uds_ctx_t` 是处理器眼中的一次事务：请求及其长度、已剥离抑制位的
+  子功能、到达时所处会话与解锁等级、一个已写好响应标识符的响应缓冲区，以及一处跨同一事务
+  各相位保存临时内容的位置。`nx_uds_phase_t` 说明处理器为何被调用，`nx_uds_disposition_t`
+  说明它作了什么决定。
+- **服务表行** —— `nx_uds_service_t` 以数据形式描述一个服务：其标识符、处理器、所需的会话
+  与安全等级、可用的子功能（以及各子功能可选的可达会话），还有其请求落在一个怎样的长度窗口内。
+
+```c
+#include "nx_uds.h"
+
+/* 一个服务，用数据描述：读一个数据标识符，在所有会话可用，无需解锁，无子功能，
+ * 请求长度固定。 */
+static nx_uds_disposition_t read_did(nx_uds_ctx_t *ctx, void *user)
+{
+    (void)user;
+
+    if (ctx->phase != NX_UDS_PHASE_REQUEST) {
+        return NX_UDS_DISPOSITION_DONE;
+    }
+    /* out[0] 已填入 0x62；追加所请求的标识符与一个字节。 */
+    ctx->out[1]  = ctx->req[1];
+    ctx->out[2]  = ctx->req[2];
+    ctx->out[3]  = 0x5Au;
+    ctx->out_len = 4u;
+    return NX_UDS_DISPOSITION_DONE;
+}
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_READ_DATA_BY_IDENTIFIER,
+        .handler      = read_did,
+        .user         = NULL,
+        .flags        = 0u,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .sec_level    = 0u,
+        .min_len      = 3u,
+        .max_len      = 3u
+    }
+};
+```
+
+> **注意：** 会话的位就是它自身的值，因此掩码触及 `NX_UDS_SESSION_MAX` 为止，无法更远。
+> ISO 14229 定义的各会话都远在其内，但厂商与供应商区间一直延伸到 0x7E，无法用掩码命名 ——
+> `NX_UDS_SESSION_BIT()` 对它们不产生位，而不是按类型宽度移位，因此列出其中之一的某行
+> 是没有任何会话能匹配的行。掩码为 0 表示不命名任何会话，并在初始化时被拒绝，因而零值行
+> 不会悄然失效。
+
+### nx_uds_server —— ISO 14229 诊断服务器（ECU 侧）
+
+ISO 14229 对话的服务端：接收一个请求 A_PDU，找到实现它的服务，产出响应 A_PDU。本模块
+不知道请求是经由什么到达的 —— 请求通过 `nx_uds_server_indicate()` 以纯字节外加它的寻址
+方式进入，响应则经由一个由应用接线的回调送出。每个实例服务一条对话。
+
+服务器拥有的正是各服务所共享的部分。服务集合是应用自己的，以 `nx_uds_service_t` 行组成的
+表持有；加一个服务就是写一个处理器并加一行，本模块无需改动。在这一分派之上，服务器还持有
+会话与使其跌落的 S3 定时器、ISO 14229-2 规定的响应时序、把慢事务撑长的等待通知，以及不
+属于任何服务的负响应。
+
+- **一次只处理一个事务** —— 一个请求被接收、跑到它的响应，然后才接纳下一个。
+  `nx_uds_server_indicate()` 以 `ERR_BUSY` 拒绝而非开启第二个事务，需要多轮循环的处理器
+  会把事务一直攥在手里直到完成。
+- **响应时序由配置驱动** —— 服务器把自身约束在 P2、P2* 与 P4（皆以微秒计），在超过 P2
+  时发出等待通知，并在 P4 或 `max_pending` 二者先到者处放弃该事务（以配置的 `p4_nrc` 应答）。
+- **会话是一种资源** —— 服务器跟踪当前会话与已解锁的安全等级，非默认会话在 `s3_us`
+  的静默后跌落，并在它接受的每个请求上重启该定时器。
+- **只用调用方提供的缓冲区** —— 请求在其事务存续期间被拷入 `req_buf`，响应在 `out_buf`
+  中组装；需要跨多轮循环的处理器读这一个缓冲区、写另一个缓冲区。不做任何分配。
+- **匹配不到服务的请求也有答复** —— 它开启一个产生负响应的事务，因此拒绝以与正响应
+  相同的方式送出。
+
+服务器对外暴露服务需要用来与它对话的若干项：`_session` 与 `_sec_level` 报告请求到达时
+的状态，`_set_session` 与 `_set_sec_level` 改变它，`_touch` 重启静默定时器，`_timing`、
+`_now` 与 `_apdu_limits` 公布服务器自持的约定，`_is_busy` 则询问是否有事务在运行。
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+
+static bool send_response(void *user, uint8_t link, const uint8_t *rsp,
+                          uint32_t len, uint8_t ta_type)
+{
+    (void)user; (void)link; (void)ta_type;
+    return can_send(myself, rsp, len);   /* 已排队，或返回 false 稍后重试 */
+}
+
+static nx_uds_disposition_t read_did(nx_uds_ctx_t *ctx, void *user)
+{
+    (void)user;
+
+    if (ctx->phase != NX_UDS_PHASE_REQUEST) {
+        return NX_UDS_DISPOSITION_DONE;
+    }
+    ctx->out[1] = ctx->req[1];   /* 所请求的标识符 */
+    ctx->out[2] = ctx->req[2];
+    ctx->out[3] = 0x5Au;         /* 一个字节的数据 */
+    ctx->out_len = 4u;
+    return NX_UDS_DISPOSITION_DONE;
+}
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_READ_DATA_BY_IDENTIFIER,
+        .handler      = read_did,
+        .flags        = 0u,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .min_len      = 3u,
+        .max_len      = 3u
+    }
+};
+
+static uint32_t board_micros(void) { return timer_read_us(); }
+
+static nx_uds_server_t srv;
+static uint8_t req_buf[64];
+static uint8_t out_buf[64];
+
+static void server_setup(void)
+{
+    nx_uds_server_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.services       = services;
+    cfg.services_count = 1u;
+    cfg.out_fn         = send_response;
+    cfg.req_buf        = req_buf;
+    cfg.req_buf_size   = sizeof(req_buf);
+    cfg.out_buf        = out_buf;
+    cfg.out_buf_size   = sizeof(out_buf);
+    cfg.max_req_apdu   = sizeof(req_buf);
+    cfg.get_us         = board_micros;
+
+    nx_uds_server_init(&srv, &cfg);
+}
+```
+
+> **注意：** 事务运行期间到达的请求以 `ERR_BUSY` 拒绝，正在运行的事务被完全置之不理。
+> 另一种做法 —— 取消当前的以接纳新来者 —— 会把进行中的工作丢给任何请求，包括一条
+> 从未专门发给本服务器的广播 TesterPresent。被拒绝的请求如何处理由调用方决定：用 0x21
+> 回复它会让客户端重发，而对一条功能性寻址的请求直接丢弃也是正确的。
+
+### nx_uds_svc_std —— 始终需要的服务处理器
+
+无论还实现了什么，诊断服务器都应回答的三个服务：0x10 诊断会话控制、0x11 ECU 复位与
+0x3E 存在测试。每个都是占据普通服务表行的普通处理器，与应用自己的服务一同入表、以同样
+方式被访问。各自通过行的 `user` 指针传入自己的配置结构体，这里不保留任何自身状态。
+
+- **0x10 会话控制** —— 回显会话自身，并给出响应窗口 P2 与 P2*，在该答复抵达客户端后才
+  进入该会话。窗口取自服务器而非在此配置，因此宣布的就是被执行的。进入任何会话都会
+  重新锁定安全，无论进入的是哪个会话。
+- **0x11 ECU 复位** —— 回显复位类型，0x04 另外附带配置的掉电时间，在该答复抵达客户端后
+  才执行复位。在答复发出前就复位的服务器，在客户端看来就像是自行重启了。
+- **0x3E 存在测试** —— 回显子功能，其余什么也不做；服务器对接受的每个请求都会重启静默
+  定时器，而这个服务正是无话可说、只想保持会话的客户端所发送的东西。
+
+每个处理器都公布其行必须声明的内容，因为声明了别的什么并不会被纠正：一个服务不期望的
+长度边界，或列入了产品做不到的子功能，产生的是一台答错的服务器，而非拒绝启动的服务器。
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_std.h"
+
+static nx_uds_server_t srv;
+
+static bool allow_session(void *user, uint8_t from, uint8_t to, uint8_t *nrc)
+{
+    (void)user; (void)from; (void)to; (void)nrc;
+    return !driving_now();          /* 行驶中拒绝进入编程会话 */
+}
+
+static nx_uds_svc_std_session_cfg_t session_cfg = {
+    .srv      = &srv,
+    .allow_fn = allow_session,
+};
+
+static void do_reset(void *user, uint8_t reset_type)
+{
+    (void)user;
+    if (reset_type == NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN) {
+        power_down_requested = true;      /* 0x04 只记录，不立即复位 */
+    } else {
+        board_reset(reset_type);
+    }
+}
+
+static nx_uds_svc_std_reset_cfg_t reset_cfg = {
+    .do_fn           = do_reset,
+    .power_down_time = 0xFEu,            /* 没有可用的掉电时间 */
+};
+
+static const uint8_t sessions[] = {
+    NX_UDS_SESSION_DEFAULT, NX_UDS_SESSION_PROGRAMMING, NX_UDS_SESSION_EXTENDED,
+};
+static const uint8_t resets[] = {
+    NX_UDS_RESET_HARD, NX_UDS_RESET_KEY_OFF_ON, NX_UDS_RESET_SOFT,
+    NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN,
+};
+static const uint8_t tester_present_sub = NX_UDS_SVC_STD_TESTER_PRESENT_SUB;
+
+static const nx_uds_service_t services[] = {
+    {
+        .sid          = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
+        .handler      = nx_uds_svc_std_session_control,
+        .user         = &session_cfg,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = sessions,
+        .subs_count   = 3u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+    {
+        .sid          = NX_UDS_SID_ECU_RESET,
+        .handler      = nx_uds_svc_std_ecu_reset,
+        .user         = &reset_cfg,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = resets,
+        .subs_count   = 4u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+    {
+        .sid          = NX_UDS_SID_TESTER_PRESENT,
+        .handler      = nx_uds_svc_std_tester_present,
+        .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
+        .session_mask = NX_UDS_SESSION_MASK_ALL,
+        .subs         = &tester_present_sub,
+        .subs_count   = 1u,
+        .min_len      = 2u,
+        .max_len      = 2u
+    },
+};
+```
+
+> **注意：** 0x10 与 0x11 在 CONFIRM/SILENCE 相位行动，而非在它们生成答复时，因此变更或
+> 复位只在客户端已被告知请求获准后发生。在那一刻对请求采取行动的代码询问缓冲区里的响应
+> 是否正是该服务的正响应，从而拒绝不会被误当作它取代的接受。正响应被抑制的请求仍然会
+> 被采取行动（在答复本应被发出的时刻）；答复未到达链路的请求则不会。
+
+### nx_uds_svc_sec —— 0x27 种子/密钥交换
+
+解锁某个安全等级的种子/密钥交换。每个等级是一对子功能 —— 奇数的要种子，其后偶数的送
+密钥 —— 而"已解锁等级"正是服务行的 `sec_level` 所命名的。算法不在这里：应用通过两个回调
+产生种子并判定密钥，本模块从不接触秘密，也不发明随机数。它拥有的是序列与防猜测机制。
+
+- **配对即等级** —— 等级 *n* 是子功能 `NX_UDS_SVC_SEC_SEED_SUB(n)` 与 `NX_UDS_SVC_SEC_KEY_SUB(n)`，
+  故等级 1 是 0x01/0x02，等级 2 是 0x03/0x04，直到 `NX_UDS_SVC_SEC_MAX_LEVEL`。等级列表中
+  缺席的等级并不存在。
+- **每个等级的字节数固定** —— 每个等级声明其种子与密钥各有多长。无论种子是现算的还是该
+  等级已解锁，种子应答都恰好这么长；密钥必须恰好是声明的长度。
+- **种子一经判定即被消耗** —— 同一把密钥不能提交两次，错误的密钥会消耗种子，于是第二次
+  尝试从索要新种子开始。
+- **等待期** —— 错误密钥计为一次尝试；当计数达到 `max_attempts`，模块开始一段 `delay_us`
+  的时间，其间每个 0x27 请求都以 0x37 拒绝、且不咨询任何回调。计数与等待期既胜过会话
+  变更也胜过重新上锁，而 `nx_uds_svc_sec_get_lockout()` / `nx_uds_svc_sec_set_lockout()` 这对函数
+  把它们存放到某个能挨过掉电的地方。
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_sec.h"
+
+static nx_uds_server_t srv;
+
+static bool make_seed(void *user, uint8_t level, const uint8_t *record,
+                      uint32_t record_len, uint8_t *seed, uint32_t seed_cap,
+                      uint32_t *seed_len)
+{
+    (void)user; (void)level; (void)record; (void)record_len;
+    (void)seed_cap;
+    seed[0] = random_byte();
+    *seed_len = 1u;
+    return true;
+}
+
+static bool judge_key(void *user, uint8_t level, const uint8_t *seed,
+                      uint32_t seed_len, const uint8_t *key, uint32_t key_len)
+{
+    (void)user;
+    return level == 1u && seed_len == 1u && key_len == 1u
+           && key[0] == (uint8_t)(seed[0] ^ 0x5Au);   /* 仅是示例 */
+}
+
+static const nx_uds_svc_sec_level_t levels[] = {
+    { .level = 1u, .seed_len = 1u, .key_len = 1u },
+};
+
+static uint8_t seed_buf[4];
+
+static nx_uds_svc_sec_t sec;
+static void sec_setup(void)
+{
+    nx_uds_svc_sec_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv          = &srv;
+    cfg.levels       = levels;
+    cfg.levels_count = 1u;
+    cfg.seed_fn      = make_seed;
+    cfg.verify_fn    = judge_key;
+    cfg.seed_buf     = seed_buf;
+    cfg.seed_buf_size = sizeof(seed_buf);
+
+    nx_uds_svc_sec_init(&sec, &cfg);
+}
+```
+
+> **注意：** 错误的密钥只有当它所在请求的形式正确时才计为一次尝试。没有未决种子就送来的
+> 密钥以 0x24（请求顺序错误）应答且不计次；客户端要求不被告知的种子不会被发出 —— 也就
+> 没有可计次的东西。计数跨所有等级合计，因此逐级尝试的客户端仍是一个客户端，而达到上限
+> 正是开启等待期的原因。
+
+### nx_uds_svc_transfer —— 搬移一块内存
+
+内存传输服务：0x34 请求下载、0x35 请求上传、0x36 传输数据与 0x37 请求传输退出。四个
+处理器占据四行普通的服务表行，外加一次传输所需的状态 —— 以哪个方向运行、覆盖哪块区域、
+进展到何处、下一块是哪个。内存不在这里：应用通过两个回调读写它，本模块从不触及任何地址。
+
+- **开启、搬运、关闭** —— 传输由 0x34（客户端写内存）或 0x35（客户端读它）开启，
+  由任意多次 0x36 交换搬运，由 0x37 关闭。一次只运行一个，而一次开启只有当
+  声明的整个区域都已搬完才算完成。
+- **块长被宣布** —— 开启应答给出一个块的长度，以整条消息而非仅其载荷计算，并取自
+  服务器所能承载的。`nx_uds_svc_transfer_payload_room()` 减去计数器与标识符所占的两个字节开销。
+- **同一块到达两次不会被搬运两次** —— 与上一已提交块相同的计数器会再次应答，从同一处、
+  以同样长度，因此丢失的应答可恢复，而不是一次翻倍的写入。既非下一块也非上一块的
+  计数器会被拒绝，传输保持开启以便客户端重试。
+- **上传的最后一块较短** —— 服务器读取声名区域所余下的部分；而会写越过客户端自己声明
+  末端的下载会被拒绝。
+- **完成与否由应用说了算** —— 0x37 在组装其答复之前调用关闭回调，这正是在那里校验已写
+  映像、或将某分区标记为有效的时机。它不动会话、已解锁等级与静默定时器：客户端通常
+  在一个会话里跑若干次传输。
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_server.h"
+#include "nx_uds_svc_transfer.h"
+
+static nx_uds_server_t srv;
+
+static bool open_transfer(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t addr,
+                          nx_uds_svc_transfer_addr_t size, uint8_t format, uint32_t *block_len,
+                          uint8_t *nrc)
+{
+    (void)user; (void)format; (void)block_len; (void)nrc;
+    return (dir == NX_UDS_SVC_TRANSFER_DOWNLOAD) && addr == FLASH_BASE && size > 0u;
+}
+
+static bool write_block(void *user, nx_uds_svc_transfer_addr_t addr, const uint8_t *data,
+                        uint32_t len, uint8_t *nrc)
+{
+    (void)user; (void)addr; (void)data; (void)len; (void)nrc;
+    return true;    /* flash_write_buffered(addr, data, len); */
+}
+
+static bool read_block(void *user, nx_uds_svc_transfer_addr_t addr, uint8_t *out,
+                       uint32_t len, uint8_t *nrc)
+{
+    (void)user; (void)addr; (void)out; (void)len; (void)nrc;
+    return true;    /* flash_read(addr, out, len); */
+}
+
+static bool close_transfer(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t done,
+                           nx_uds_svc_transfer_addr_t size, const uint8_t *record,
+                           uint32_t record_len, uint8_t *out, uint32_t out_cap,
+                           uint32_t *out_len, uint8_t *nrc)
+{
+    (void)user; (void)dir; (void)done; (void)size; (void)record;
+    (void)record_len; (void)out; (void)out_cap; (void)out_len; (void)nrc;
+    return flash_checksum_ok();
+}
+
+static nx_uds_svc_transfer_t xfer;
+static void xfer_setup(void)
+{
+    nx_uds_svc_transfer_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv           = &srv;
+    cfg.open_fn       = open_transfer;
+    cfg.write_fn      = write_block;
+    cfg.read_fn       = read_block;
+    cfg.close_fn      = close_transfer;
+    cfg.max_block_len = FLASH_WRITE_UNIT;
+
+    nx_uds_svc_transfer_init(&xfer, &cfg);
+}
+
+/* 四行承载该传输；每行以同一句柄作为 user。 */
+static const nx_uds_service_t services[] = {
+    { .sid = NX_UDS_SID_REQUEST_DOWNLOAD,  .handler = nx_uds_svc_transfer_request_download,
+      .user = &xfer, .min_len = 5u, .max_len = 33u },
+    { .sid = NX_UDS_SID_REQUEST_UPLOAD,    .handler = nx_uds_svc_transfer_request_upload,
+      .user = &xfer, .min_len = 5u, .max_len = 33u },
+    { .sid = NX_UDS_SID_TRANSFER_DATA,     .handler = nx_uds_svc_transfer_data,
+      .user = &xfer, .min_len = 2u, .max_len = 0u },
+    { .sid = NX_UDS_SID_REQUEST_TRANSFER_EXIT,
+      .handler = nx_uds_svc_transfer_exit, .user = &xfer,
+      .min_len = 1u, .max_len = 0u },
+};
+```
+
+> **注意：** 0x36 标识符之后的那个字节是块序号计数器，不是子功能。该行不得声明
+> `NX_UDS_SVC_HAS_SUB_FUNCTION`，因为把该字节顶位当作请求静默读取，会令每次传输的一半
+> 都得不到任何应答。该行的 `max_len` 为 0 —— 真正的上限是已被宣布的长度，而其上的块按
+> 越界而不是按长度错误来拒绝。
+
+### nx_uds_tp_bind —— 把服务器接到某个传输层
+
+介于诊断服务器与某个讲 `nx_tp_sdu_t` 的传输层之间的几十行。传输层把收到的、以及发完的
+内容作为引用计数消息推入一条队列，再从另一条队列读取它应发送的内容；本模块正是把那些
+消息在服务器内外搬动的东西。它与传输层无关 —— 它只见两条队列与一个池，因此同样的代码
+把服务器接到任何一个填充 `nx_tp_sdu_t` 的传输层。每条通路一个实例。
+
+- **手写时容易出错的那些机制** —— 收到的消息在服务器复制完毕后立即被释放；传输层暂时
+  接不下的响应留给服务器再次呈递而非丢弃；回答某请求期间到达的请求会保持会话存活而非
+  任其超时；发布的每个响应都寻址到欠它的那一个客户端，而不是发到整个链路上。
+- **每趟一步** —— `nx_uds_tp_bind_process()` 每次至多从入站队列取走一条消息，因为服务器
+  一次应答一个请求，第二个只会被拒绝而非排队。这里并不泵动服务器；驱动什么、以何顺序，
+  由应用来安排。
+- **属于自己的池** —— 池按通路而非共享，因此一条通路上的洪泛无法饿死另一条。
+- **丢了什么被计数** —— 统计信息上报每条被丢弃而未应答的消息，于是一条计数器攀升的通路
+  是在悄然失败。
+
+该绑定把自己安装为服务器的输出通路，因而服务器自己的 `out_fn` 与 `out_user` 会被覆盖。
+先初始化服务器，再绑定它。
+
+```c
+#include "nx_queue.h"
+#include "nx_ref_msg.h"
+#include "nx_tiered_mem_pool.h"
+#include "nx_tp_sdu.h"
+#include "nx_uds_server.h"
+#include "nx_uds_tp_bind.h"
+
+static nx_uds_server_t srv;
+static nx_tiered_mem_pool_t pool;
+static nx_queue_t sdu_in_q, sdu_out_q;
+
+static nx_uds_tp_bind_t bind;
+static void bind_setup(void)
+{
+    nx_uds_tp_bind_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.srv         = &srv;
+    cfg.sdu_in      = &sdu_in_q;   /* 传输层推入的已收到内容 */
+    cfg.sdu_out     = &sdu_out_q;  /* 传输层取出并发送的内容 */
+    cfg.pool        = &pool;
+    cfg.link        = 1u;
+    cfg.max_sdu_len = 4096u;
+
+    nx_uds_tp_bind_init(&bind, &cfg);
+}
+```
+
+> **注意：** 无论请求如何抵达，响应总是物理寻址的。传输层在它被要求发送的消息上读取
+> `ta_type` 来选择 CAN 标识符，因此把请求的功能性寻址一路传下去，会让响应用到广播抵达的
+> 那个地址上 —— 在 ECU 上也就是 0，无人监听的地址。绑定在每个出站响应里写入
+> `NX_TP_TA_PHYSICAL`，正是为此。
+
+### nx_uds_client —— ISO 14229 诊断客户端（测试工具侧）
+
+ISO 14229 对话的另一半：接收一个请求 A_PDU，报告结果 —— 返回的响应 A_PDU，或为什么没有返回。
+本模块不知道请求是经由什么到达的 —— 请求经一个由应用接线的回调送出，响应通过
+`nx_uds_client_indicate()` 以纯字节外加其寻址方式进入。每个实例一次只跑一个事务，因此客户端
+是一个提问并等待的测试工具，而非源源不断发流的对端。
+
+一个事务是一个问题以及对其答案的等待。客户端把请求提供给发送通道，等待 P2 等待响应，若
+服务器说答案还在路上 —— 携带 0x78 responsePending 的负响应 —— 则等待 P2* 并继续，最多到
+有界的扩展次数。等待窗口由服务器设定：0x10 正响应公布 P2 与 P2*，客户端即为本次对话采纳它们，
+除非配置了 `fixed_timing`，此时它始终使用自己的值。
+
+- **一次只处理一个事务** —— 一个请求被装好、跑到它的结果，然后才接纳下一个。有事务在飞时，
+  `nx_uds_client_request()` 以 `ERR_BUSY` 拒绝。
+- **报告的是结果而不仅是字节** —— 结果回调指明事务如何结束：正响应、拒绝、协议错误、超时、
+  取消，或是请求本就要求无正响应时的静默（唯一不算失败的静默）。
+- **发送通道给出答复** —— 载体对请求做了什么，经 `nx_uds_client_confirm()` 回报，因此若请求
+  从未上到链路上，客户端立刻听到，而不是等响应窗口耗尽。对一时接不下请求的载体，客户端在
+  下一趟重新提供同一个请求而非丢弃 —— 但只到 `send_timeout_us` 为止。
+- **时序由服务器设定** —— 除非设置 `fixed_timing`，等待窗口即公布的取值，因此客户端在服务器
+  说响应已迟到时超时，而非在应用猜测会迟到时超时。
+- **只用调用方提供的缓冲区** —— 在飞的请求存放在 `req_buf`，抵达的响应存放在 `rsp_buf`，
+  皆由调用方持有。不做任何分配。
+
+客户端对外暴露应用驱动会话所需的状态：`_is_busy` 询问是否有对话在运行，`_session` 报告
+当前会话，`_timing` 报告正在使用的等待窗口，`_set_send` 则让某个绑定在客户端初始化之后把
+自己装为发送通道。
+
+```c
+#include "nx_uds.h"
+#include "nx_uds_client.h"
+
+static bool send_request(void *user, uint8_t link, const uint8_t *req,
+                         uint32_t len, uint8_t ta_type)
+{
+    (void)user; (void)link; (void)ta_type;
+    return can_send(myself, req, len);   /* 已排队，或返回 false 稍后重试 */
+}
+
+static void report(void *user, nx_uds_client_t *clt, nx_uds_client_result_t result)
+{
+    (void)user;
+    const uint8_t *rsp = clt->cfg.rsp_buf;
+    uint32_t len = nx_uds_client_resp_len(clt);
+    if (result == NX_UDS_CLIENT_RESULT_NEGATIVE) {
+        reason_code = rsp[2];            /* 拒绝该请求的 NRC */
+    }
+}
+
+static uint32_t board_micros(void) { return timer_read_us(); }
+
+static nx_uds_client_t clt;
+static uint8_t req_buf[16];
+static uint8_t rsp_buf[64];
+
+static void client_setup(void)
+{
+    nx_uds_client_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+
+    cfg.result_fn     = report;
+    cfg.send_fn       = send_request;
+    cfg.req_buf       = req_buf;
+    cfg.req_buf_size  = sizeof(req_buf);
+    cfg.rsp_buf       = rsp_buf;
+    cfg.rsp_buf_size  = sizeof(rsp_buf);
+    cfg.link          = 1u;
+    cfg.get_us        = board_micros;
+
+    nx_uds_client_init(&clt, &cfg);
+}
+
+static void ask_session(void)
+{
+    /* 0x10 0x00，物理寻址：这个 ECU 处于哪个会话？ */
+    nx_uds_client_request(&clt, NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL, 0x00u, NULL, 0u,
+                          NX_TP_TA_PHYSICAL);
+    while (nx_uds_client_is_busy(&clt)) {
+        nx_uds_client_process(&clt);   /* 每次主循环迭代 */
+    }
+}
+```
+
+> **注意：** `nx_uds_client_request()` 并不会发送任何东西。它把请求装好，第一次
+> `nx_uds_client_process()` 调用才把它提供给发送通道，因此调用 `request()` 后立刻读
+> `rsp_buf`，看到的永远是一个零字节。发送通道接下请求也不意味着事务在发货 —— 它只在结果
+> 触发时才算结束，对大多数信号而言那发生在结果回调里；而要求静默的请求，其终结时永远不会
+> 在缓冲区里放一个响应。

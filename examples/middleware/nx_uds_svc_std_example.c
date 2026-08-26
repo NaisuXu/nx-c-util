@@ -1,5 +1,5 @@
 /**
- * @file    nx_uds_svc_example.c
+ * @file    nx_uds_svc_std_example.c
  * @brief   Exercises the services every server needs: 0x10, 0x11, 0x3E, 0x27.
  *
  * One server, one table holding the four library handlers and nothing else, and a
@@ -15,8 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "src/middleware/nx_uds_sec.h"
-#include "src/middleware/nx_uds_svc.h"
+#include "src/middleware/nx_uds_svc_sec.h"
+#include "src/middleware/nx_uds_svc_std.h"
 
 #define LINK_ID     1u
 #define P2_US       50000u      /* 50 ms  -> 50 counts of 1 ms   */
@@ -82,7 +82,7 @@ static uint8_t  g_granted_level;
 static bool     g_refuse_session;  /* the product will not enter one right now */
 
 static nx_uds_server_t g_srv;
-static nx_uds_sec_t    g_sec;
+static nx_uds_svc_sec_t    g_sec;
 
 static void app_do_reset(void *user, uint8_t reset_type)
 {
@@ -144,20 +144,20 @@ static void app_granted(void *user, uint8_t level)
 }
 
 /* ---- the table ---- */
-static nx_uds_svc_session_cfg_t g_session_cfg = {
+static nx_uds_svc_std_session_cfg_t g_session_cfg = {
     .srv      = &g_srv,
     .allow_fn = app_allow_session,
     .user     = NULL
 };
 
-static nx_uds_svc_reset_cfg_t g_reset_cfg = {
+static nx_uds_svc_std_reset_cfg_t g_reset_cfg = {
     .do_fn           = app_do_reset,
     .allow_fn        = NULL,
     .user            = NULL,
     .power_down_time = 12u
 };
 
-static const nx_uds_sec_level_t g_levels[] = {
+static const nx_uds_svc_sec_level_t g_levels[] = {
     { 1u, SEED_LEN, KEY_LEN }
 };
 
@@ -175,18 +175,18 @@ static const uint8_t g_reset_subs[] = {
     NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN
 };
 
-static const uint8_t g_tp_subs[] = { NX_UDS_TESTER_PRESENT_SUB };
+static const uint8_t g_tp_subs[] = { NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
 
 /* Both sub-functions of the one level offered. */
 static const uint8_t g_sec_subs[] = {
-    NX_UDS_SEC_SEED_SUB(1u), NX_UDS_SEC_KEY_SUB(1u)
+    NX_UDS_SVC_SEC_SEED_SUB(1u), NX_UDS_SVC_SEC_KEY_SUB(1u)
 };
 
 static const nx_uds_service_t g_services[] = {
     {   /* 0x10: reachable from every session, since a server that cannot be asked
          * to leave a session can only be power-cycled out of it. */
         .sid = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler = nx_uds_svc_session_control,
+        .handler = nx_uds_svc_std_session_control,
         .user = &g_session_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -196,7 +196,7 @@ static const nx_uds_service_t g_services[] = {
     },
     {   /* 0x11: a reset is not something the default session offers. */
         .sid = NX_UDS_SID_ECU_RESET,
-        .handler = nx_uds_svc_ecu_reset,
+        .handler = nx_uds_svc_std_ecu_reset,
         .user = &g_reset_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_NON_DEFAULT,
@@ -207,7 +207,7 @@ static const nx_uds_service_t g_services[] = {
     {   /* 0x3E: every session, and left unanswered when broadcast so that a link
          * full of servers does not answer at once. */
         .sid = NX_UDS_SID_TESTER_PRESENT,
-        .handler = nx_uds_svc_tester_present,
+        .handler = nx_uds_svc_std_tester_present,
         .user = NULL,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -235,7 +235,7 @@ static uint8_t g_out_buf[32];
 static void setup(void)
 {
     nx_uds_server_cfg_t cfg;
-    nx_uds_sec_cfg_t    scfg;
+    nx_uds_svc_sec_cfg_t    scfg;
     static uint8_t      seed_store[SEED_LEN];
 
     g_now = 1000u;
@@ -257,7 +257,7 @@ static void setup(void)
     scfg.seed_buf_size = sizeof(seed_store);
     scfg.max_attempts  = 2u;
     scfg.delay_us      = 100000u;    /* 100 ms, so the example need not wait */
-    assert(nx_uds_sec_init(&g_sec, &scfg));
+    assert(nx_uds_svc_sec_init(&g_sec, &scfg));
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.services       = g_services;
@@ -664,7 +664,7 @@ static void demo_lockout(void)
         bool     waiting  = false;
         uint32_t remaining = 0u;
 
-        nx_uds_sec_get_lockout(&g_sec, &attempts, &waiting, &remaining);
+        nx_uds_svc_sec_get_lockout(&g_sec, &attempts, &waiting, &remaining);
         assert(attempts == 2u && waiting && remaining > 0u);
         printf("  %-24s%u attempts, %u us left\n", "stored ->",
                (unsigned)attempts, (unsigned)remaining);
@@ -679,7 +679,7 @@ static void demo_lockout(void)
         assert(g_sent[0] == 0x67u);
         confirmed();
 
-        assert(nx_uds_sec_set_lockout(&g_sec, attempts, waiting, remaining));
+        assert(nx_uds_svc_sec_set_lockout(&g_sec, attempts, waiting, remaining));
         submit(g_ask_seed, 2u, (uint8_t)NX_TP_TA_PHYSICAL);
         show("restored ->");
         assert(g_sent_len == 3u && g_sent[2] == 0x37u);
@@ -740,9 +740,9 @@ static void demo_relock(void)
            (unsigned)nx_uds_server_sec_level(&g_srv));
 }
 
-int nx_uds_svc_example_run(void)
+int nx_uds_svc_std_example_run(void)
 {
-    printf("=== nx_uds_svc example ===\n");
+    printf("=== nx_uds_svc_std example ===\n");
 
     demo_session();
     demo_reset();
@@ -751,7 +751,7 @@ int nx_uds_svc_example_run(void)
     demo_lockout();
     demo_relock();
 
-    printf("nx_uds_svc example passed\n\n");
+    printf("nx_uds_svc_std example passed\n\n");
     return 0;
 }
 

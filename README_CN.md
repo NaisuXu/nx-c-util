@@ -57,6 +57,13 @@ nx-c-util/
 - [nx_modbus_rtu_master](docs/middleware_cn.md#nx_modbus_rtu_master--事件驱动的-rtu-主站队列--线路--订阅分发) —— 事件驱动的 RTU 主站：队列 → 线路 → 订阅分发
 - [nx_tp_sdu](docs/middleware_cn.md#nx_tp_sdu--传输层服务数据单元) — 传输层服务数据单元
 - [nx_can_isotp](docs/middleware_cn.md#nx_can_isotp--iso-15765-2docan--iso-tp分段传输) — ISO 15765-2（DoCAN / ISO-TP）分段传输
+- [nx_uds](docs/middleware_cn.md#nx_uds--iso-14229-词汇表) —— ISO 14229 词汇表
+- [nx_uds_server](docs/middleware_cn.md#nx_uds_server--iso-14229-诊断服务器ecu-侧) —— ISO 14229 诊断服务器（ECU 侧）
+- [nx_uds_svc_std](docs/middleware_cn.md#nx_uds_svc_std--始终需要的服务处理器) —— 始终需要的服务处理器
+- [nx_uds_svc_sec](docs/middleware_cn.md#nx_uds_svc_sec--027-种子密钥交换) —— 0x27 种子/密钥交换
+- [nx_uds_svc_transfer](docs/middleware_cn.md#nx_uds_svc_transfer--搬移一块内存) —— 搬移一块内存
+- [nx_uds_tp_bind](docs/middleware_cn.md#nx_uds_tp_bind--把服务器接到某个传输层) —— 把服务器接到某个传输层
+- [nx_uds_client](docs/middleware_cn.md#nx_uds_client--iso-14229-诊断客户端测试工具侧) —— ISO 14229 诊断客户端（测试工具侧）
 
 详细说明和示例请参阅[中间件模块文档](docs/middleware_cn.md)。
 

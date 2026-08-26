@@ -1,10 +1,10 @@
 /**
- * @file    nx_uds_transfer.c
+ * @file    nx_uds_svc_transfer.c
  * @brief   Implementation of the memory transfer services.
  */
 #include <string.h>
 
-#include "nx_uds_transfer.h"
+#include "nx_uds_svc_transfer.h"
 
 /** @brief Bytes of a 0x34/0x35 request before the two declared fields. */
 #define XFER_REQ_FIXED 3u
@@ -20,21 +20,21 @@
  * @param  out Where to store the value.
  * @return true when the value fits what an address holds.
  */
-static bool xfer_read_be(const uint8_t *p, uint32_t len, nx_uds_addr_t *out)
+static bool xfer_read_be(const uint8_t *p, uint32_t len, nx_uds_svc_transfer_addr_t *out)
 {
-    nx_uds_addr_t v = 0u;
+    nx_uds_svc_transfer_addr_t v = 0u;
     uint32_t i;
 
     /* A field declared wider than an address is acceptable while the bytes above
      * the width are zero: a client that always sends four bytes is talking to a
      * server whose addresses happen to be narrower. */
-    for (i = 0u; i + sizeof(nx_uds_addr_t) < len; i++) {
+    for (i = 0u; i + sizeof(nx_uds_svc_transfer_addr_t) < len; i++) {
         if (p[i] != 0u) {
             return false;
         }
     }
     for (; i < len; i++) {
-        v = (nx_uds_addr_t)((v << 8) | p[i]);
+        v = (nx_uds_svc_transfer_addr_t)((v << 8) | p[i]);
     }
     *out = v;
     return true;
@@ -59,7 +59,7 @@ static void xfer_write_be(uint8_t *p, uint32_t len, uint32_t v)
 /* ------------------------------------------------------------------ */
 /* Setting up and tearing down                                       */
 /* ------------------------------------------------------------------ */
-bool nx_uds_xfer_init(nx_uds_xfer_t *xfer, const nx_uds_xfer_cfg_t *cfg)
+bool nx_uds_svc_transfer_init(nx_uds_svc_transfer_t *xfer, const nx_uds_svc_transfer_cfg_t *cfg)
 {
     if (xfer == NULL || cfg == NULL || cfg->srv == NULL) {
         return false;
@@ -86,12 +86,12 @@ bool nx_uds_xfer_init(nx_uds_xfer_t *xfer, const nx_uds_xfer_cfg_t *cfg)
  *
  * @param  xfer Handle.
  */
-static void xfer_clear(nx_uds_xfer_t *xfer)
+static void xfer_clear(nx_uds_svc_transfer_t *xfer)
 {
     memset(&xfer->run, 0, sizeof(xfer->run));
 }
 
-void nx_uds_xfer_abort(nx_uds_xfer_t *xfer)
+void nx_uds_svc_transfer_abort(nx_uds_svc_transfer_t *xfer)
 {
     if (xfer == NULL) {
         return;
@@ -99,11 +99,11 @@ void nx_uds_xfer_abort(nx_uds_xfer_t *xfer)
     xfer_clear(xfer);
 }
 
-nx_uds_xfer_dir_t nx_uds_xfer_progress(const nx_uds_xfer_t *xfer,
-                                       nx_uds_addr_t *done, nx_uds_addr_t *size)
+nx_uds_svc_transfer_dir_t nx_uds_svc_transfer_progress(const nx_uds_svc_transfer_t *xfer,
+                                       nx_uds_svc_transfer_addr_t *done, nx_uds_svc_transfer_addr_t *size)
 {
     if (xfer == NULL) {
-        return NX_UDS_XFER_NONE;
+        return NX_UDS_SVC_TRANSFER_NONE;
     }
     if (done != NULL) {
         *done = xfer->run.done;
@@ -111,7 +111,7 @@ nx_uds_xfer_dir_t nx_uds_xfer_progress(const nx_uds_xfer_t *xfer,
     if (size != NULL) {
         *size = xfer->run.size;
     }
-    return (nx_uds_xfer_dir_t)xfer->run.dir;
+    return (nx_uds_svc_transfer_dir_t)xfer->run.dir;
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,15 +128,15 @@ nx_uds_xfer_dir_t nx_uds_xfer_progress(const nx_uds_xfer_t *xfer,
  * @param  dir  Which way the transfer runs.
  * @return The length, counting the whole message.
  */
-static uint32_t xfer_announce_len(const nx_uds_xfer_t *xfer,
-                                  nx_uds_xfer_dir_t dir)
+static uint32_t xfer_announce_len(const nx_uds_svc_transfer_t *xfer,
+                                  nx_uds_svc_transfer_dir_t dir)
 {
     uint32_t req = 0u;
     uint32_t rsp = 0u;
     uint32_t len;
 
     nx_uds_server_apdu_limits(xfer->cfg.srv, &req, &rsp);
-    len = (dir == NX_UDS_XFER_DOWNLOAD) ? req : rsp;
+    len = (dir == NX_UDS_SVC_TRANSFER_DOWNLOAD) ? req : rsp;
 
     /* A product whose write window is narrower than the link says so. */
     if (xfer->cfg.max_block_len != 0u && xfer->cfg.max_block_len < len) {
@@ -176,25 +176,25 @@ static uint32_t xfer_width_for(uint32_t v)
  * @param  dir  Which way it runs.
  * @return What to do with the request.
  */
-static nx_uds_disposition_t xfer_open(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx,
-                                      nx_uds_xfer_dir_t dir)
+static nx_uds_disposition_t xfer_open(nx_uds_svc_transfer_t *xfer, nx_uds_ctx_t *ctx,
+                                      nx_uds_svc_transfer_dir_t dir)
 {
     uint32_t addr_len;
     uint32_t size_len;
-    nx_uds_addr_t addr = 0u;
-    nx_uds_addr_t size = 0u;
+    nx_uds_svc_transfer_addr_t addr = 0u;
+    nx_uds_svc_transfer_addr_t size = 0u;
     uint32_t block_len;
     uint32_t width;
     uint8_t  nrc = NX_UDS_NRC_REQUEST_OUT_OF_RANGE;
 
-    if (xfer->run.dir != (uint8_t)NX_UDS_XFER_NONE) {
+    if (xfer->run.dir != (uint8_t)NX_UDS_SVC_TRANSFER_NONE) {
         /* One at a time. A second opening while one runs would abandon whatever the
          * first had written without saying so. */
         ctx->nrc = NX_UDS_NRC_CONDITIONS_NOT_CORRECT;
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
-    if ((dir == NX_UDS_XFER_DOWNLOAD && xfer->cfg.write_fn == NULL)
-        || (dir == NX_UDS_XFER_UPLOAD && xfer->cfg.read_fn == NULL)) {
+    if ((dir == NX_UDS_SVC_TRANSFER_DOWNLOAD && xfer->cfg.write_fn == NULL)
+        || (dir == NX_UDS_SVC_TRANSFER_UPLOAD && xfer->cfg.read_fn == NULL)) {
         ctx->nrc = NX_UDS_NRC_UPLOAD_DOWNLOAD_NOT_ACCEPTED;
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
@@ -234,7 +234,7 @@ static nx_uds_disposition_t xfer_open(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx,
     if (block_len > xfer_announce_len(xfer, dir)) {
         block_len = xfer_announce_len(xfer, dir);
     }
-    if (nx_uds_xfer_payload_room(block_len) == 0u) {
+    if (nx_uds_svc_transfer_payload_room(block_len) == 0u) {
         /* Nothing would fit in a block, so the transfer could not advance. */
         ctx->nrc = NX_UDS_NRC_CONDITIONS_NOT_CORRECT;
         return NX_UDS_DISPOSITION_NEGATIVE;
@@ -251,7 +251,7 @@ static nx_uds_disposition_t xfer_open(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx,
     xfer->run.size      = size;
     xfer->run.done      = 0u;
     xfer->run.block_len = block_len;
-    xfer->run.bsc_next  = NX_UDS_XFER_FIRST_BSC;
+    xfer->run.bsc_next  = NX_UDS_SVC_TRANSFER_FIRST_BSC;
     xfer->run.bsc_last  = 0u;
     xfer->run.committed = false;
     xfer->run.last_len  = 0u;
@@ -264,9 +264,9 @@ static nx_uds_disposition_t xfer_open(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx,
     return NX_UDS_DISPOSITION_DONE;
 }
 
-nx_uds_disposition_t nx_uds_svc_request_download(nx_uds_ctx_t *ctx, void *user)
+nx_uds_disposition_t nx_uds_svc_transfer_request_download(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_xfer_t *xfer = (nx_uds_xfer_t *)user;
+    nx_uds_svc_transfer_t *xfer = (nx_uds_svc_transfer_t *)user;
 
     if (xfer == NULL) {
         ctx->nrc = NX_UDS_NRC_CONDITIONS_NOT_CORRECT;
@@ -275,12 +275,12 @@ nx_uds_disposition_t nx_uds_svc_request_download(nx_uds_ctx_t *ctx, void *user)
     if (ctx->phase != NX_UDS_PHASE_REQUEST) {
         return NX_UDS_DISPOSITION_DONE;
     }
-    return xfer_open(xfer, ctx, NX_UDS_XFER_DOWNLOAD);
+    return xfer_open(xfer, ctx, NX_UDS_SVC_TRANSFER_DOWNLOAD);
 }
 
-nx_uds_disposition_t nx_uds_svc_request_upload(nx_uds_ctx_t *ctx, void *user)
+nx_uds_disposition_t nx_uds_svc_transfer_request_upload(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_xfer_t *xfer = (nx_uds_xfer_t *)user;
+    nx_uds_svc_transfer_t *xfer = (nx_uds_svc_transfer_t *)user;
 
     if (xfer == NULL) {
         ctx->nrc = NX_UDS_NRC_CONDITIONS_NOT_CORRECT;
@@ -289,7 +289,7 @@ nx_uds_disposition_t nx_uds_svc_request_upload(nx_uds_ctx_t *ctx, void *user)
     if (ctx->phase != NX_UDS_PHASE_REQUEST) {
         return NX_UDS_DISPOSITION_DONE;
     }
-    return xfer_open(xfer, ctx, NX_UDS_XFER_UPLOAD);
+    return xfer_open(xfer, ctx, NX_UDS_SVC_TRANSFER_UPLOAD);
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,24 +307,24 @@ nx_uds_disposition_t nx_uds_svc_request_upload(nx_uds_ctx_t *ctx, void *user)
  * @param  len  Payload to read.
  * @return What to do with the request.
  */
-static nx_uds_disposition_t xfer_fill_upload(nx_uds_xfer_t *xfer,
+static nx_uds_disposition_t xfer_fill_upload(nx_uds_svc_transfer_t *xfer,
                                              nx_uds_ctx_t *ctx,
-                                             nx_uds_addr_t offset, uint32_t len)
+                                             nx_uds_svc_transfer_addr_t offset, uint32_t len)
 {
     uint8_t nrc = NX_UDS_NRC_GENERAL_PROGRAMMING_FAILURE;
 
-    if (ctx->out_cap < NX_UDS_XFER_BLOCK_OVERHEAD + len) {
+    if (ctx->out_cap < NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD + len) {
         /* The answer would not fit what the server said it would send, which is a
          * server announcing more than it can carry rather than a bad request. */
         ctx->nrc = NX_UDS_NRC_RESPONSE_TOO_LONG;
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
     if (!xfer->cfg.read_fn(xfer->cfg.user, xfer->run.addr + offset,
-                           &ctx->out[NX_UDS_XFER_BLOCK_OVERHEAD], len, &nrc)) {
+                           &ctx->out[NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD], len, &nrc)) {
         ctx->nrc = nrc;
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
-    ctx->out_len = NX_UDS_XFER_BLOCK_OVERHEAD + len;
+    ctx->out_len = NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD + len;
     return NX_UDS_DISPOSITION_DONE;
 }
 
@@ -339,11 +339,11 @@ static nx_uds_disposition_t xfer_fill_upload(nx_uds_xfer_t *xfer,
  * @param  ctx  Transaction.
  * @return What to do with the request.
  */
-static nx_uds_disposition_t xfer_repeat(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx)
+static nx_uds_disposition_t xfer_repeat(nx_uds_svc_transfer_t *xfer, nx_uds_ctx_t *ctx)
 {
     ctx->out[1] = xfer->run.bsc_last;
 
-    if (xfer->run.dir == (uint8_t)NX_UDS_XFER_UPLOAD) {
+    if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_UPLOAD) {
         /* The same bytes, which means the block that was sent rather than the one
          * that comes next: the cursor has already moved past it, so the block
          * begins its own length back from where the cursor now stands. */
@@ -351,13 +351,13 @@ static nx_uds_disposition_t xfer_repeat(nx_uds_xfer_t *xfer, nx_uds_ctx_t *ctx)
                                 xfer->run.done - xfer->run.last_len,
                                 xfer->run.last_len);
     }
-    ctx->out_len = NX_UDS_XFER_BLOCK_OVERHEAD;
+    ctx->out_len = NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD;
     return NX_UDS_DISPOSITION_DONE;
 }
 
 nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_xfer_t *xfer = (nx_uds_xfer_t *)user;
+    nx_uds_svc_transfer_t *xfer = (nx_uds_svc_transfer_t *)user;
     uint32_t room;
     uint32_t len;
     uint8_t  bsc;
@@ -370,7 +370,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
     if (ctx->phase != NX_UDS_PHASE_REQUEST) {
         return NX_UDS_DISPOSITION_DONE;
     }
-    if (xfer->run.dir == (uint8_t)NX_UDS_XFER_NONE) {
+    if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_NONE) {
         /* Nothing is open, so this service has no business arriving. Distinct from a
          * block out of turn, which is the right service at the wrong point in a
          * transfer that does exist. */
@@ -381,7 +381,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
     /* The byte after the identifier is a counter, and the whole of it is the
      * counter: no part of it asks for anything. */
     bsc  = ctx->req[1];
-    room = nx_uds_xfer_payload_room(xfer->run.block_len);
+    room = nx_uds_svc_transfer_payload_room(xfer->run.block_len);
 
     if (xfer->run.committed && bsc == xfer->run.bsc_last) {
         return xfer_repeat(xfer, ctx);
@@ -393,8 +393,8 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
 
-    if (xfer->run.dir == (uint8_t)NX_UDS_XFER_DOWNLOAD) {
-        len = ctx->req_len - NX_UDS_XFER_BLOCK_OVERHEAD;
+    if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_DOWNLOAD) {
+        len = ctx->req_len - NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD;
         if (len == 0u || len > room) {
             /* A block larger than what was announced is well formed and larger than
              * the server said it would take, and a block with nothing in it cannot
@@ -409,7 +409,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
     }
 
     if (xfer->run.done + len > xfer->run.size) {
-        nx_uds_addr_t left = xfer->run.size - xfer->run.done;
+        nx_uds_svc_transfer_addr_t left = xfer->run.size - xfer->run.done;
 
         if (left == 0u) {
             /* The region declared has been transferred; there is nowhere to put
@@ -417,7 +417,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
             ctx->nrc = NX_UDS_NRC_REQUEST_OUT_OF_RANGE;
             return NX_UDS_DISPOSITION_NEGATIVE;
         }
-        if (xfer->run.dir == (uint8_t)NX_UDS_XFER_DOWNLOAD) {
+        if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_DOWNLOAD) {
             /* Writing past the end of what the client itself declared. */
             ctx->nrc = NX_UDS_NRC_REQUEST_OUT_OF_RANGE;
             return NX_UDS_DISPOSITION_NEGATIVE;
@@ -426,15 +426,15 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
     }
 
     ctx->out[1] = bsc;
-    if (xfer->run.dir == (uint8_t)NX_UDS_XFER_DOWNLOAD) {
+    if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_DOWNLOAD) {
         if (!xfer->cfg.write_fn(xfer->cfg.user, xfer->run.addr + xfer->run.done,
-                                &ctx->req[NX_UDS_XFER_BLOCK_OVERHEAD], len,
+                                &ctx->req[NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD], len,
                                 &nrc)) {
             /* Nothing is advanced, so the client may send the same block again. */
             ctx->nrc = nrc;
             return NX_UDS_DISPOSITION_NEGATIVE;
         }
-        ctx->out_len = NX_UDS_XFER_BLOCK_OVERHEAD;
+        ctx->out_len = NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD;
     } else {
         nx_uds_disposition_t d = xfer_fill_upload(xfer, ctx, xfer->run.done, len);
 
@@ -458,7 +458,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_data(nx_uds_ctx_t *ctx, void *user)
 /* ------------------------------------------------------------------ */
 nx_uds_disposition_t nx_uds_svc_transfer_exit(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_xfer_t *xfer = (nx_uds_xfer_t *)user;
+    nx_uds_svc_transfer_t *xfer = (nx_uds_svc_transfer_t *)user;
     const uint8_t *record = NULL;
     uint32_t record_len = 0u;
     uint32_t out_len = 0u;
@@ -471,7 +471,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_exit(nx_uds_ctx_t *ctx, void *user)
     if (ctx->phase != NX_UDS_PHASE_REQUEST) {
         return NX_UDS_DISPOSITION_DONE;
     }
-    if (xfer->run.dir == (uint8_t)NX_UDS_XFER_NONE) {
+    if (xfer->run.dir == (uint8_t)NX_UDS_SVC_TRANSFER_NONE) {
         ctx->nrc = NX_UDS_NRC_REQUEST_SEQUENCE_ERROR;
         return NX_UDS_DISPOSITION_NEGATIVE;
     }
@@ -491,7 +491,7 @@ nx_uds_disposition_t nx_uds_svc_transfer_exit(nx_uds_ctx_t *ctx, void *user)
 
     if (xfer->cfg.close_fn != NULL
         && !xfer->cfg.close_fn(xfer->cfg.user,
-                               (nx_uds_xfer_dir_t)xfer->run.dir,
+                               (nx_uds_svc_transfer_dir_t)xfer->run.dir,
                                xfer->run.done, xfer->run.size,
                                record, record_len,
                                &ctx->out[1],

@@ -1,5 +1,5 @@
 /**
- * @file    nx_uds_transfer.h
+ * @file    nx_uds_svc_transfer.h
  * @brief   Moving a block of memory: 0x34, 0x35, 0x36 and 0x37.
  *
  * Four handlers occupying four ordinary service table rows, plus the state one
@@ -15,8 +15,8 @@
  * A transfer is opened by 0x34 to write memory or 0x35 to read it, carried by any
  * number of 0x36 exchanges, and closed by 0x37. One runs at a time.
  */
-#ifndef NX_UDS_TRANSFER_H
-#define NX_UDS_TRANSFER_H
+#ifndef NX_UDS_SVC_TRANSFER_H
+#define NX_UDS_SVC_TRANSFER_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -34,20 +34,20 @@ extern "C" {
  * Wide enough for the memory the application describes. A build whose addresses
  * fit in 32 bits pays nothing for the ones that do not.
  */
-typedef uint32_t nx_uds_addr_t;
+typedef uint32_t nx_uds_svc_transfer_addr_t;
 
 /** @brief Which way a transfer runs. */
 typedef enum {
-    NX_UDS_XFER_NONE = 0,   /**< None is open */
-    NX_UDS_XFER_DOWNLOAD,   /**< Opened by 0x34: the client writes memory */
-    NX_UDS_XFER_UPLOAD      /**< Opened by 0x35: the client reads memory */
-} nx_uds_xfer_dir_t;
+    NX_UDS_SVC_TRANSFER_NONE = 0,   /**< None is open */
+    NX_UDS_SVC_TRANSFER_DOWNLOAD,   /**< Opened by 0x34: the client writes memory */
+    NX_UDS_SVC_TRANSFER_UPLOAD      /**< Opened by 0x35: the client reads memory */
+} nx_uds_svc_transfer_dir_t;
 
 /** @brief Bytes of a block that are not payload: the identifier and the counter. */
-#define NX_UDS_XFER_BLOCK_OVERHEAD 2u
+#define NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD 2u
 
 /** @brief Counter the first block of a fresh transfer carries. */
-#define NX_UDS_XFER_FIRST_BSC 0x01u
+#define NX_UDS_SVC_TRANSFER_FIRST_BSC 0x01u
 
 /**
  * @brief  Payload a block of the announced length holds.
@@ -59,10 +59,10 @@ typedef enum {
  * @param  block_len The announced length.
  * @return Bytes of payload, 0 where the announced length holds none.
  */
-static inline uint32_t nx_uds_xfer_payload_room(uint32_t block_len)
+static inline uint32_t nx_uds_svc_transfer_payload_room(uint32_t block_len)
 {
-    return (block_len > NX_UDS_XFER_BLOCK_OVERHEAD)
-               ? (block_len - NX_UDS_XFER_BLOCK_OVERHEAD)
+    return (block_len > NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD)
+               ? (block_len - NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD)
                : 0u;
 }
 
@@ -78,7 +78,7 @@ static inline uint32_t nx_uds_xfer_payload_room(uint32_t block_len)
  * names another reason. A region the product will not write is out of range; a
  * product that is momentarily unable to is @c NX_UDS_NRC_CONDITIONS_NOT_CORRECT.
  *
- * @param  user      The @c user field of nx_uds_xfer_cfg_t.
+ * @param  user      The @c user field of nx_uds_svc_transfer_cfg_t.
  * @param  dir       Which way the transfer runs.
  * @param  addr      Region start, as the request declared it.
  * @param  size      Region length, as the request declared it.
@@ -89,8 +89,8 @@ static inline uint32_t nx_uds_xfer_payload_room(uint32_t block_len)
  * @param  nrc       Optional reason to refuse with, when refusing.
  * @return true to open the transfer.
  */
-typedef bool (*nx_uds_xfer_open_fn)(void *user, nx_uds_xfer_dir_t dir,
-                                   nx_uds_addr_t addr, nx_uds_addr_t size,
+typedef bool (*nx_uds_svc_transfer_open_fn)(void *user, nx_uds_svc_transfer_dir_t dir,
+                                   nx_uds_svc_transfer_addr_t addr, nx_uds_svc_transfer_addr_t size,
                                    uint8_t format, uint32_t *block_len,
                                    uint8_t *nrc);
 
@@ -108,7 +108,7 @@ typedef bool (*nx_uds_xfer_open_fn)(void *user, nx_uds_xfer_dir_t dir,
  * @param  nrc  Optional reason to refuse with.
  * @return true when the block was written.
  */
-typedef bool (*nx_uds_xfer_write_fn)(void *user, nx_uds_addr_t addr,
+typedef bool (*nx_uds_svc_transfer_write_fn)(void *user, nx_uds_svc_transfer_addr_t addr,
                                      const uint8_t *data, uint32_t len,
                                      uint8_t *nrc);
 
@@ -125,7 +125,7 @@ typedef bool (*nx_uds_xfer_write_fn)(void *user, nx_uds_addr_t addr,
  * @param  nrc  Optional reason to refuse with.
  * @return true when the bytes were read.
  */
-typedef bool (*nx_uds_xfer_read_fn)(void *user, nx_uds_addr_t addr, uint8_t *out,
+typedef bool (*nx_uds_svc_transfer_read_fn)(void *user, nx_uds_svc_transfer_addr_t addr, uint8_t *out,
                                     uint32_t len, uint8_t *nrc);
 
 /**
@@ -153,8 +153,8 @@ typedef bool (*nx_uds_xfer_read_fn)(void *user, nx_uds_addr_t addr, uint8_t *out
  * @param  nrc        Optional reason to refuse with.
  * @return true to finish the transfer.
  */
-typedef bool (*nx_uds_xfer_close_fn)(void *user, nx_uds_xfer_dir_t dir,
-                                     nx_uds_addr_t done, nx_uds_addr_t size,
+typedef bool (*nx_uds_svc_transfer_close_fn)(void *user, nx_uds_svc_transfer_dir_t dir,
+                                     nx_uds_svc_transfer_addr_t done, nx_uds_svc_transfer_addr_t size,
                                      const uint8_t *record, uint32_t record_len,
                                      uint8_t *out, uint32_t out_cap,
                                      uint32_t *out_len, uint8_t *nrc);
@@ -167,12 +167,12 @@ typedef struct {
                                    Required: the block size is derived from what it
                                    carries. */
 
-    nx_uds_xfer_open_fn  open_fn; /**< Consulted before a transfer opens; may be
+    nx_uds_svc_transfer_open_fn  open_fn; /**< Consulted before a transfer opens; may be
                                    NULL to accept any region the request declares,
                                    which is rarely what a product wants. */
-    nx_uds_xfer_write_fn write_fn;/**< Writes a block. Required to serve 0x34. */
-    nx_uds_xfer_read_fn  read_fn; /**< Reads a block. Required to serve 0x35. */
-    nx_uds_xfer_close_fn close_fn;/**< Finishes a transfer; may be NULL to finish
+    nx_uds_svc_transfer_write_fn write_fn;/**< Writes a block. Required to serve 0x34. */
+    nx_uds_svc_transfer_read_fn  read_fn; /**< Reads a block. Required to serve 0x35. */
+    nx_uds_svc_transfer_close_fn close_fn;/**< Finishes a transfer; may be NULL to finish
                                    whatever was transferred without checking it. */
     void                *user;    /**< Passed to all four untouched. */
 
@@ -192,28 +192,28 @@ typedef struct {
                                    Left false, a transfer may be finished short,
                                    which is what a client writing an image smaller
                                    than the region it reserved does. */
-} nx_uds_xfer_cfg_t;
+} nx_uds_svc_transfer_cfg_t;
 
 /**
  * @brief A transfer, as far as it has got.
  *
  * Declare one in static storage beside the server and hand it to
- * nx_uds_xfer_init. Its address is what all four rows carry as @c user.
+ * nx_uds_svc_transfer_init. Its address is what all four rows carry as @c user.
  *
  * @note  @c run is internal state; treat the whole object as opaque once passed to
- *        nx_uds_xfer_init.
+ *        nx_uds_svc_transfer_init.
  */
 typedef struct {
-    nx_uds_xfer_cfg_t cfg;          /**< Copied configuration */
+    nx_uds_svc_transfer_cfg_t cfg;          /**< Copied configuration */
     struct {
-        uint8_t       dir;          /**< An nx_uds_xfer_dir_t; NONE when none is
+        uint8_t       dir;          /**< An nx_uds_svc_transfer_dir_t; NONE when none is
                                      open */
-        nx_uds_addr_t addr;         /**< Region start, as declared. Not advanced:
+        nx_uds_svc_transfer_addr_t addr;         /**< Region start, as declared. Not advanced:
                                      the next block goes at addr + done, and a
                                      block arriving twice reads back from the same
                                      place. */
-        nx_uds_addr_t size;         /**< Region length, as declared */
-        nx_uds_addr_t done;         /**< Bytes transferred, advanced only by a block
+        nx_uds_svc_transfer_addr_t size;         /**< Region length, as declared */
+        nx_uds_svc_transfer_addr_t done;         /**< Bytes transferred, advanced only by a block
                                      that was committed */
         uint32_t      block_len;    /**< The length that was announced, which is
                                      what an arriving block is measured against */
@@ -224,7 +224,7 @@ typedef struct {
         uint32_t      last_len;     /**< Payload of the last committed block, so one
                                      arriving twice is answered at the same length */
     } run;                          /**< Internal runtime state */
-} nx_uds_xfer_t;
+} nx_uds_svc_transfer_t;
 
 /**
  * @brief  Set up the transfer services.
@@ -234,7 +234,7 @@ typedef struct {
  * @return true on success; false where @c srv is missing, or where neither
  *         @c write_fn nor @c read_fn is given and so no direction can be served.
  */
-bool nx_uds_xfer_init(nx_uds_xfer_t *xfer, const nx_uds_xfer_cfg_t *cfg);
+bool nx_uds_svc_transfer_init(nx_uds_svc_transfer_t *xfer, const nx_uds_svc_transfer_cfg_t *cfg);
 
 /**
  * @brief  Abandon whatever transfer is open.
@@ -246,7 +246,7 @@ bool nx_uds_xfer_init(nx_uds_xfer_t *xfer, const nx_uds_xfer_cfg_t *cfg);
  *
  * @param  xfer Handle; NULL does nothing.
  */
-void nx_uds_xfer_abort(nx_uds_xfer_t *xfer);
+void nx_uds_svc_transfer_abort(nx_uds_svc_transfer_t *xfer);
 
 /**
  * @brief  How far the open transfer has got.
@@ -254,15 +254,15 @@ void nx_uds_xfer_abort(nx_uds_xfer_t *xfer);
  * @param  xfer Handle, must not be NULL.
  * @param  done Where to store the bytes transferred; may be NULL.
  * @param  size Where to store the bytes declared; may be NULL.
- * @return Which way it runs, NX_UDS_XFER_NONE when none is open.
+ * @return Which way it runs, NX_UDS_SVC_TRANSFER_NONE when none is open.
  */
-nx_uds_xfer_dir_t nx_uds_xfer_progress(const nx_uds_xfer_t *xfer,
-                                       nx_uds_addr_t *done, nx_uds_addr_t *size);
+nx_uds_svc_transfer_dir_t nx_uds_svc_transfer_progress(const nx_uds_svc_transfer_t *xfer,
+                                       nx_uds_svc_transfer_addr_t *done, nx_uds_svc_transfer_addr_t *size);
 
 /**
  * @brief  0x34 RequestDownload — open a transfer that writes memory.
  *
- * The row's @c user is the nx_uds_xfer_t. Answers with the length of one block,
+ * The row's @c user is the nx_uds_svc_transfer_t. Answers with the length of one block,
  * which the client sizes every block to and which counts the whole message rather
  * than its payload alone.
  *
@@ -270,7 +270,7 @@ nx_uds_xfer_dir_t nx_uds_xfer_progress(const nx_uds_xfer_t *xfer,
  *        the declared widths allow; the exact length follows from the request's own
  *        format byte and is checked here. No sub-function.
  */
-nx_uds_disposition_t nx_uds_svc_request_download(nx_uds_ctx_t *ctx, void *user);
+nx_uds_disposition_t nx_uds_svc_transfer_request_download(nx_uds_ctx_t *ctx, void *user);
 
 /**
  * @brief  0x35 RequestUpload — open a transfer that reads memory.
@@ -281,7 +281,7 @@ nx_uds_disposition_t nx_uds_svc_request_download(nx_uds_ctx_t *ctx, void *user);
  *
  * @note  The row must declare @c min_len 5 and @c max_len 33. No sub-function.
  */
-nx_uds_disposition_t nx_uds_svc_request_upload(nx_uds_ctx_t *ctx, void *user);
+nx_uds_disposition_t nx_uds_svc_transfer_request_upload(nx_uds_ctx_t *ctx, void *user);
 
 /**
  * @brief  0x36 TransferData — carry one block.
@@ -319,4 +319,4 @@ nx_uds_disposition_t nx_uds_svc_transfer_exit(nx_uds_ctx_t *ctx, void *user);
 }
 #endif
 
-#endif /* NX_UDS_TRANSFER_H */
+#endif /* NX_UDS_SVC_TRANSFER_H */

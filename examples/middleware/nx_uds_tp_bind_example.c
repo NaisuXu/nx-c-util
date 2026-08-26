@@ -39,10 +39,10 @@
 #include <string.h>
 
 #include "src/middleware/nx_can_isotp.h"
-#include "src/middleware/nx_uds_sec.h"
-#include "src/middleware/nx_uds_svc.h"
+#include "src/middleware/nx_uds_svc_sec.h"
+#include "src/middleware/nx_uds_svc_std.h"
 #include "src/middleware/nx_uds_tp_bind.h"
-#include "src/middleware/nx_uds_transfer.h"
+#include "src/middleware/nx_uds_svc_transfer.h"
 
 /* The identifier pair, as a diagnostic network assigns it: the tester asks on the
  * request identifier and the ECU answers on the response one. Each instance
@@ -122,9 +122,9 @@ static nx_can_isotp_t g_tst_tp;
 
 static nx_uds_server_t    g_srv;
 static nx_uds_tp_bind_t   g_bind;
-static nx_uds_sec_t       g_sec;
-static nx_uds_xfer_t      g_xfer;
-static nx_uds_svc_session_cfg_t g_session_cfg;
+static nx_uds_svc_sec_t       g_sec;
+static nx_uds_svc_transfer_t g_xfer;
+static nx_uds_svc_std_session_cfg_t g_session_cfg;
 
 /* ------------------------------------------------------------------ */
 /* The bus                                                            */
@@ -330,8 +330,8 @@ static void app_reset(void *user, uint8_t reset_type)
     g_reset_asked = reset_type;
 }
 
-static bool app_open(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t addr,
-                     nx_uds_addr_t size, uint8_t format, uint32_t *block_len,
+static bool app_open(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t addr,
+                     nx_uds_svc_transfer_addr_t size, uint8_t format, uint32_t *block_len,
                      uint8_t *nrc)
 {
     (void)user; (void)dir; (void)block_len;
@@ -347,7 +347,7 @@ static bool app_open(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t addr,
     return true;
 }
 
-static bool app_write(void *user, nx_uds_addr_t addr, const uint8_t *data,
+static bool app_write(void *user, nx_uds_svc_transfer_addr_t addr, const uint8_t *data,
                       uint32_t len, uint8_t *nrc)
 {
     (void)user; (void)nrc;
@@ -358,7 +358,7 @@ static bool app_write(void *user, nx_uds_addr_t addr, const uint8_t *data,
     return true;
 }
 
-static bool app_read(void *user, nx_uds_addr_t addr, uint8_t *out, uint32_t len,
+static bool app_read(void *user, nx_uds_svc_transfer_addr_t addr, uint8_t *out, uint32_t len,
                      uint8_t *nrc)
 {
     (void)user; (void)nrc;
@@ -368,8 +368,8 @@ static bool app_read(void *user, nx_uds_addr_t addr, uint8_t *out, uint32_t len,
     return true;
 }
 
-static bool app_close(void *user, nx_uds_xfer_dir_t dir, nx_uds_addr_t done,
-                      nx_uds_addr_t size, const uint8_t *record,
+static bool app_close(void *user, nx_uds_svc_transfer_dir_t dir, nx_uds_svc_transfer_addr_t done,
+                      nx_uds_svc_transfer_addr_t size, const uint8_t *record,
                       uint32_t record_len, uint8_t *out, uint32_t out_cap,
                       uint32_t *out_len, uint8_t *nrc)
 {
@@ -392,22 +392,22 @@ static const uint8_t g_session_subs[] = {
 };
 static const uint8_t g_reset_subs[] = { NX_UDS_RESET_HARD, NX_UDS_RESET_SOFT };
 static const uint8_t g_sec_subs[] = {
-    NX_UDS_SEC_SEED_SUB(SEC_LEVEL), NX_UDS_SEC_KEY_SUB(SEC_LEVEL)
+    NX_UDS_SVC_SEC_SEED_SUB(SEC_LEVEL), NX_UDS_SVC_SEC_KEY_SUB(SEC_LEVEL)
 };
-static const uint8_t g_tp_subs[] = { NX_UDS_TESTER_PRESENT_SUB };
+static const uint8_t g_tp_subs[] = { NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
 
-static const nx_uds_sec_level_t g_sec_levels[] = {
+static const nx_uds_svc_sec_level_t g_sec_levels[] = {
     { SEC_LEVEL, SEC_SEED_LEN, SEC_KEY_LEN }
 };
 static uint8_t g_seed_buf[SEC_SEED_LEN];
 
-static nx_uds_svc_reset_cfg_t g_reset_cfg = {
+static nx_uds_svc_std_reset_cfg_t g_reset_cfg = {
     .do_fn = app_reset, .allow_fn = NULL, .user = NULL, .power_down_time = 0u
 };
 
 static const nx_uds_service_t g_services[] = {
     {   .sid = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler = nx_uds_svc_session_control, .user = &g_session_cfg,
+        .handler = nx_uds_svc_std_session_control, .user = &g_session_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION | NX_UDS_SVC_ANSWER_FUNCTIONAL,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_session_subs,
@@ -415,7 +415,7 @@ static const nx_uds_service_t g_services[] = {
         .sub_session_masks = NULL, .min_len = 2u, .max_len = 2u },
 
     {   .sid = NX_UDS_SID_ECU_RESET,
-        .handler = nx_uds_svc_ecu_reset, .user = &g_reset_cfg,
+        .handler = nx_uds_svc_std_ecu_reset, .user = &g_reset_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_reset_subs,
@@ -425,7 +425,7 @@ static const nx_uds_service_t g_services[] = {
     {   /* Answered functionally as well, since a tester keeps a whole network alive
          * with one broadcast rather than one request per ECU. */
         .sid = NX_UDS_SID_TESTER_PRESENT,
-        .handler = nx_uds_svc_tester_present, .user = NULL,
+        .handler = nx_uds_svc_std_tester_present, .user = NULL,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION | NX_UDS_SVC_ANSWER_FUNCTIONAL,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_tp_subs,
@@ -443,14 +443,14 @@ static const nx_uds_service_t g_services[] = {
     /* The transfer services need the level unlocked and the programming session,
      * which is what a flash sequence has to earn before it can start. */
     {   .sid = NX_UDS_SID_REQUEST_DOWNLOAD,
-        .handler = nx_uds_svc_request_download, .user = &g_xfer,
+        .handler = nx_uds_svc_transfer_request_download, .user = &g_xfer,
         .flags = 0u, .session_mask = NX_UDS_SESSION_MASK_PROGRAMMING,
         .sec_level = SEC_LEVEL,
         .subs = NULL, .subs_count = 0u, .sub_session_masks = NULL,
         .min_len = 5u, .max_len = 33u },
 
     {   .sid = NX_UDS_SID_REQUEST_UPLOAD,
-        .handler = nx_uds_svc_request_upload, .user = &g_xfer,
+        .handler = nx_uds_svc_transfer_request_upload, .user = &g_xfer,
         .flags = 0u, .session_mask = NX_UDS_SESSION_MASK_PROGRAMMING,
         .sec_level = SEC_LEVEL,
         .subs = NULL, .subs_count = 0u, .sub_session_masks = NULL,
@@ -493,8 +493,8 @@ static void setup(void)
     nx_tiered_mem_pool_cfg_t pool_cfg;
     nx_can_isotp_cfg_t       tp_cfg;
     nx_uds_server_cfg_t      srv_cfg;
-    nx_uds_sec_cfg_t         sec_cfg;
-    nx_uds_xfer_cfg_t        xfer_cfg;
+    nx_uds_svc_sec_cfg_t      sec_cfg;
+    nx_uds_svc_transfer_cfg_t  xfer_cfg;
     nx_uds_tp_bind_cfg_t     bind_cfg;
 
     g_now_us         = 1000u;
@@ -601,7 +601,7 @@ static void setup(void)
     sec_cfg.granted_fn    = app_granted;
     sec_cfg.seed_buf      = g_seed_buf;
     sec_cfg.seed_buf_size = sizeof(g_seed_buf);
-    assert(nx_uds_sec_init(&g_sec, &sec_cfg));
+    assert(nx_uds_svc_sec_init(&g_sec, &sec_cfg));
 
     memset(&xfer_cfg, 0, sizeof(xfer_cfg));
     xfer_cfg.srv      = &g_srv;
@@ -613,7 +613,7 @@ static void setup(void)
      * ordinary case and the reason a client is told a block length at all: the
      * region then takes several blocks and the counter has to carry across them. */
     xfer_cfg.max_block_len = XFER_BLOCK_LEN;
-    assert(nx_uds_xfer_init(&g_xfer, &xfer_cfg));
+    assert(nx_uds_svc_transfer_init(&g_xfer, &xfer_cfg));
 
     /* The binding, last: it wires the server's answers to the ECU transport. The
      * queues are named from the binding's point of view, which is the opposite of
@@ -646,7 +646,7 @@ static void expect_no_losses(void)
 static void demo_single_frame(void)
 {
     static const uint8_t enter_extended[] = { 0x10u, NX_UDS_SESSION_EXTENDED };
-    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_TESTER_PRESENT_SUB };
+    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
 
     printf("1. a request and its answer, one frame each\n");
     setup();
@@ -683,7 +683,7 @@ static void demo_single_frame(void)
 /** @brief Unlock the one level: ask for the seed, answer with the key. */
 static void unlock(void)
 {
-    static const uint8_t seed_req[] = { 0x27u, NX_UDS_SEC_SEED_SUB(SEC_LEVEL) };
+    static const uint8_t seed_req[] = { 0x27u, NX_UDS_SVC_SEC_SEED_SUB(SEC_LEVEL) };
     uint8_t key_req[2u + SEC_KEY_LEN];
     uint8_t seed[SEC_SEED_LEN];
     uint32_t i;
@@ -691,11 +691,11 @@ static void unlock(void)
     assert(ask(seed_req, sizeof(seed_req)));
     show("27 01 ->");
     assert(g_rsp_len == 2u + SEC_SEED_LEN);
-    assert(g_rsp[0] == 0x67u && g_rsp[1] == NX_UDS_SEC_SEED_SUB(SEC_LEVEL));
+    assert(g_rsp[0] == 0x67u && g_rsp[1] == NX_UDS_SVC_SEC_SEED_SUB(SEC_LEVEL));
     memcpy(seed, &g_rsp[2], SEC_SEED_LEN);
 
     key_req[0] = 0x27u;
-    key_req[1] = NX_UDS_SEC_KEY_SUB(SEC_LEVEL);
+    key_req[1] = NX_UDS_SVC_SEC_KEY_SUB(SEC_LEVEL);
     for (i = 0u; i < SEC_KEY_LEN; i++) {
         key_req[2u + i] = (uint8_t)~seed[i];
     }
@@ -735,20 +735,20 @@ static void demo_flash(void)
      * one: the width is in the high half of the byte before the number. */
     assert(g_rsp_len == 3u && g_rsp[0] == 0x74u && g_rsp[1] == 0x10u);
     block_len = g_rsp[2];
-    room      = nx_uds_xfer_payload_room(block_len);
+    room      = nx_uds_svc_transfer_payload_room(block_len);
     printf("  %-24s%u bytes, %u of payload\n", "block ->",
            (unsigned)block_len, (unsigned)room);
     /* What the product named, not what the link would have allowed: the
      * announcement is the lower of the two, because announcing more would
      * announce a block that is then refused on arrival. */
     assert(block_len == XFER_BLOCK_LEN);
-    assert(room == XFER_BLOCK_LEN - NX_UDS_XFER_BLOCK_OVERHEAD);
+    assert(room == XFER_BLOCK_LEN - NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD);
 
     /* 32 bytes in blocks of whatever the announcement allows. Each block is longer
      * than a frame, so every one of them travels segmented and is paced by the
      * receiver's flow control. */
     done = 0u;
-    bsc  = NX_UDS_XFER_FIRST_BSC;
+    bsc  = NX_UDS_SVC_TRANSFER_FIRST_BSC;
     while (done < 32u) {
         uint8_t req[2u + MAX_SDU];
         uint32_t n = (32u - done < room) ? (32u - done) : room;
@@ -797,9 +797,9 @@ static void demo_flash(void)
 /* ------------------------------------------------------------------ */
 static void demo_functional(void)
 {
-    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_TESTER_PRESENT_SUB };
+    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
     static const uint8_t suppressed[] = {
-        0x3Eu, NX_UDS_TESTER_PRESENT_SUB | NX_UDS_SUPPRESS_POS_RSP_BIT
+        0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB | NX_UDS_SUPPRESS_POS_RSP_BIT
     };
     static const uint8_t unknown_svc[] = { 0x22u, 0xF1u, 0x90u };
     nx_ref_msg_t *m = NULL;
@@ -935,7 +935,7 @@ static void demo_upload(void)
     /* The request is the counter alone; the block comes back in the answer, which
      * is longer than a frame and so travels segmented in the other direction. */
     got = 0u;
-    bsc = NX_UDS_XFER_FIRST_BSC;
+    bsc = NX_UDS_SVC_TRANSFER_FIRST_BSC;
     while (got < 40u) {
         uint8_t req[2];
         uint32_t n;
@@ -944,12 +944,12 @@ static void demo_upload(void)
         req[0] = 0x36u;
         req[1] = bsc;
         assert(ask(req, sizeof(req)));
-        assert(g_rsp_len > NX_UDS_XFER_BLOCK_OVERHEAD);
+        assert(g_rsp_len > NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD);
         assert(g_rsp[0] == 0x76u && g_rsp[1] == bsc);
 
-        n = g_rsp_len - NX_UDS_XFER_BLOCK_OVERHEAD;
+        n = g_rsp_len - NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD;
         for (j = 0u; j < n; j++) {
-            assert(g_rsp[NX_UDS_XFER_BLOCK_OVERHEAD + j]
+            assert(g_rsp[NX_UDS_SVC_TRANSFER_BLOCK_OVERHEAD + j]
                    == (uint8_t)(0x50u + got + j));
         }
         got += n;
@@ -958,9 +958,9 @@ static void demo_upload(void)
     show("last 36 ->");
     /* Forty bytes in blocks of ten, every byte the one that was in memory. */
     assert(got == 40u);
-    assert(bsc == NX_UDS_XFER_FIRST_BSC + 4u);
+    assert(bsc == NX_UDS_SVC_TRANSFER_FIRST_BSC + 4u);
     printf("  %-24s%u bytes read back in %u blocks\n", "payload ->",
-           (unsigned)got, (unsigned)(bsc - NX_UDS_XFER_FIRST_BSC));
+           (unsigned)got, (unsigned)(bsc - NX_UDS_SVC_TRANSFER_FIRST_BSC));
     expect_no_losses();
 }
 

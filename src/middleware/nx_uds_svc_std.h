@@ -1,5 +1,5 @@
 /**
- * @file    nx_uds_svc.h
+ * @file    nx_uds_svc_std.h
  * @brief   Handlers for the diagnostic services every server needs.
  *
  * Three services that a diagnostic server is expected to answer whatever else it
@@ -17,8 +17,8 @@
  * a sub-function list naming what the product cannot do, produces a server that
  * answers wrongly rather than one that refuses to start.
  */
-#ifndef NX_UDS_SVC_H
-#define NX_UDS_SVC_H
+#ifndef NX_UDS_SVC_STD_H
+#define NX_UDS_SVC_STD_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -46,13 +46,13 @@ extern "C" {
  * session the product never enters belongs in the row's @c subs instead, where it
  * is refused as unsupported rather than as momentarily impossible.
  *
- * @param  user    The @c user field of nx_uds_svc_session_cfg_t.
+ * @param  user    The @c user field of nx_uds_svc_std_session_cfg_t.
  * @param  from    The session active now; an nx_uds_session_t value.
  * @param  to      The session asked for; an nx_uds_session_t value.
  * @param  nrc     Optional reason to refuse with, when refusing.
  * @return true to allow the session to be entered.
  */
-typedef bool (*nx_uds_svc_session_allow_fn)(void *user, uint8_t from, uint8_t to,
+typedef bool (*nx_uds_svc_std_session_allow_fn)(void *user, uint8_t from, uint8_t to,
                                            uint8_t *nrc);
 
 /**
@@ -67,11 +67,11 @@ typedef bool (*nx_uds_svc_session_allow_fn)(void *user, uint8_t from, uint8_t to
 typedef struct {
     nx_uds_server_t *srv;      /**< The instance whose session is being changed.
                                 Required. */
-    nx_uds_svc_session_allow_fn allow_fn;
+    nx_uds_svc_std_session_allow_fn allow_fn;
                                /**< Consulted before the request is accepted; NULL
                                 accepts every session the row lists. */
     void            *user;     /**< Passed to @c allow_fn untouched. */
-} nx_uds_svc_session_cfg_t;
+} nx_uds_svc_std_session_cfg_t;
 
 /**
  * @brief  0x10 DiagnosticSessionControl.
@@ -91,7 +91,7 @@ typedef struct {
  * the point the answer would have been sent. A request that earns a refusal never
  * does, whether that refusal was sent or withheld.
  */
-nx_uds_disposition_t nx_uds_svc_session_control(nx_uds_ctx_t *ctx, void *user);
+nx_uds_disposition_t nx_uds_svc_std_session_control(nx_uds_ctx_t *ctx, void *user);
 
 /* ===================================================================== */
 /* 0x11 ECUReset                                                         */
@@ -112,10 +112,10 @@ nx_uds_disposition_t nx_uds_svc_session_control(nx_uds_ctx_t *ctx, void *user);
  * this point means the answer was handed over and accepted, which is not the same
  * as the client having read it.
  *
- * @param  user       The @c user field of nx_uds_svc_reset_cfg_t.
+ * @param  user       The @c user field of nx_uds_svc_std_reset_cfg_t.
  * @param  reset_type What was asked for; an nx_uds_reset_type_t value.
  */
-typedef void (*nx_uds_svc_reset_do_fn)(void *user, uint8_t reset_type);
+typedef void (*nx_uds_svc_std_reset_do_fn)(void *user, uint8_t reset_type);
 
 /**
  * @brief Whether the reset asked for can be carried out right now.
@@ -123,12 +123,12 @@ typedef void (*nx_uds_svc_reset_do_fn)(void *user, uint8_t reset_type);
  * Returning false refuses the request with
  * @c NX_UDS_NRC_CONDITIONS_NOT_CORRECT unless @c nrc names another reason.
  *
- * @param  user       The @c user field of nx_uds_svc_reset_cfg_t.
+ * @param  user       The @c user field of nx_uds_svc_std_reset_cfg_t.
  * @param  reset_type What was asked for; an nx_uds_reset_type_t value.
  * @param  nrc        Optional reason to refuse with, when refusing.
  * @return true to allow the reset.
  */
-typedef bool (*nx_uds_svc_reset_allow_fn)(void *user, uint8_t reset_type,
+typedef bool (*nx_uds_svc_std_reset_allow_fn)(void *user, uint8_t reset_type,
                                           uint8_t *nrc);
 
 /**
@@ -140,14 +140,14 @@ typedef bool (*nx_uds_svc_reset_allow_fn)(void *user, uint8_t reset_type,
  *        answered positively and then does nothing.
  */
 typedef struct {
-    nx_uds_svc_reset_do_fn    do_fn;    /**< Performs the reset. Required. */
-    nx_uds_svc_reset_allow_fn allow_fn; /**< Consulted first; NULL allows every
+    nx_uds_svc_std_reset_do_fn    do_fn;    /**< Performs the reset. Required. */
+    nx_uds_svc_std_reset_allow_fn allow_fn; /**< Consulted first; NULL allows every
                                          type the row lists. */
     void    *user;              /**< Passed to both callbacks untouched. */
     uint8_t  power_down_time;   /**< Seconds the client must wait for the power to
                                  be down, answered only to 0x04. 0xFF says the
                                  number is not available. */
-} nx_uds_svc_reset_cfg_t;
+} nx_uds_svc_std_reset_cfg_t;
 
 /**
  * @brief  0x11 ECUReset.
@@ -162,14 +162,14 @@ typedef struct {
  * link is not: the client never learned the reset was accepted, so a reset would
  * be a reboot it did not ask for.
  */
-nx_uds_disposition_t nx_uds_svc_ecu_reset(nx_uds_ctx_t *ctx, void *user);
+nx_uds_disposition_t nx_uds_svc_std_ecu_reset(nx_uds_ctx_t *ctx, void *user);
 
 /* ===================================================================== */
 /* 0x3E TesterPresent                                                    */
 /* ===================================================================== */
 
 /** @brief The only sub-function 0x3E has. */
-#define NX_UDS_TESTER_PRESENT_SUB 0x00u
+#define NX_UDS_SVC_STD_TESTER_PRESENT_SUB 0x00u
 
 /**
  * @brief  0x3E TesterPresent.
@@ -183,12 +183,12 @@ nx_uds_disposition_t nx_uds_svc_ecu_reset(nx_uds_ctx_t *ctx, void *user);
  *
  * @note  The row must declare @c min_len 2, @c max_len 2,
  *        @c NX_UDS_SVC_HAS_SUB_FUNCTION, a @c subs list of exactly
- *        @c NX_UDS_TESTER_PRESENT_SUB, and a @c session_mask reaching every
+ *        @c NX_UDS_SVC_STD_TESTER_PRESENT_SUB, and a @c session_mask reaching every
  *        session. It is also the request a client is most likely to broadcast, so
  *        the row wants @c NX_UDS_SVC_ANSWER_FUNCTIONAL left clear unless every
  *        server on the link should answer it at once.
  */
-nx_uds_disposition_t nx_uds_svc_tester_present(nx_uds_ctx_t *ctx, void *user);
+nx_uds_disposition_t nx_uds_svc_std_tester_present(nx_uds_ctx_t *ctx, void *user);
 
 /* PLACEHOLDER_BODY */
 
@@ -196,4 +196,4 @@ nx_uds_disposition_t nx_uds_svc_tester_present(nx_uds_ctx_t *ctx, void *user);
 }
 #endif
 
-#endif /* NX_UDS_SVC_H */
+#endif /* NX_UDS_SVC_STD_H */
