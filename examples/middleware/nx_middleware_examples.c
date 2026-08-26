@@ -4,6 +4,7 @@
  *
  * The actual examples live in per-component files:
  *   - nx_modbus_rtu_slave_example.c -> nx_modbus_rtu_slave_example_run()
+ *   - nx_modbus_rtu_master_example.c -> nx_modbus_rtu_master_example_run()
  *   - nx_can_isotp_example.c        -> nx_can_isotp_example_run()
  *   - nx_uds_server_example.c       -> nx_uds_server_example_run()
  *   - nx_uds_svc_example.c          -> nx_uds_svc_example_run()
@@ -19,6 +20,7 @@ int main(void)
     int rc = 0;
 
     rc |= nx_modbus_rtu_slave_example_run();
+    rc |= nx_modbus_rtu_master_example_run();
     rc |= nx_can_isotp_example_run();
     rc |= nx_uds_server_example_run();
     rc |= nx_uds_svc_example_run();

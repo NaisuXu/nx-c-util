@@ -72,11 +72,11 @@ small lookup table, so this module has a `.c` file.
   plus the exception response (`nx_modbus_rtu_rsp_exc_t`). Function codes and
   exception codes have their own enums (`nx_modbus_fc_t`, `nx_modbus_exc_t`),
   which are transport-independent and would be shared by a future TCP module.
-- **Byte order helpers** — 16-bit fields (address, quantity, register values) are
-  big-endian on the wire; use `nx_modbus_rtu_get_u16` / `set_u16` to convert. The
-  trailing CRC is little-endian (low byte first). For the variable-length frames
-  the CRC is not a named field — `nx_modbus_rtu_req_var_crc` / `rsp_var_crc`
-  return a pointer to it after the payload.
+- **Wire order** — 16-bit fields (address, quantity, register values) are carried
+  most-significant byte first; reassemble them how the code below does. The trailing
+  CRC is little-endian (low byte first). For the variable-length frames the CRC is not
+  a named field — `nx_modbus_rtu_req_var_crc` / `rsp_var_crc` return a pointer to it
+  after the payload.
 - **Self-contained CRC** — `nx_modbus_rtu_crc16` computes CRC-16/MODBUS from a
   256-entry table (no dependency on `nx_crc`); `nx_modbus_rtu_set_crc` fills a
   frame's trailing CRC and `nx_modbus_rtu_check_crc` verifies a received one.
@@ -93,20 +93,22 @@ uint8_t buf[8];
 nx_modbus_rtu_req_fix_t *req = (nx_modbus_rtu_req_fix_t *)buf;
 req->addr = 1u;
 req->cmd  = NX_MODBUS_FC_READ_HOLDING_REGS;
-nx_modbus_rtu_set_u16(&req->addr_h, 0x0000u);   /* starting address */
-nx_modbus_rtu_set_u16(&req->qty_h, 10u);        /* quantity         */
+req->addr_h = (uint8_t)(0x0000u >> 8);   /* starting address */
+req->addr_l = (uint8_t)(0x0000u & 0xFFu);
+req->qty_h  = (uint8_t)(10u >> 8);       /* quantity         */
+req->qty_l  = (uint8_t)(10u & 0xFFu);
 nx_modbus_rtu_set_crc(buf, sizeof(buf));        /* fill crc_l / crc_h */
 
 /* on a received frame, verify the CRC then read a 16-bit field */
 if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
-    uint16_t qty = nx_modbus_rtu_get_u16(&req->qty_h);   /* 10 */
+    uint16_t qty = (uint16_t)(((uint16_t)req->qty_h << 8) | req->qty_l);   /* 10 */
     (void)qty;
 }
 ```
 
 > **Note:** casting a byte buffer to a frame struct relies on the all-`uint8_t`
 > layout above; the same layout is why there is no packing pragma. Multi-byte
-> fields still need `get_u16` / `set_u16` for the big-endian wire order — don't
+> fields are carried most-significant byte first — don't
 > read them as native `uint16_t`.
 
 
@@ -204,6 +206,91 @@ for (;;) {
 > handled; with `accept_broadcast = true` they are dispatched but never answered —
 > no response, no exception.
 
+
+
+### nx_modbus_rtu_master — event-driven RTU master: queue → wire → subscription dispatch
+
+The link/dispatch layer on top of `nx_modbus_rtu` (frame structs + CRC). It transmits the
+request frames business modules push onto a shared queue, slices and validates the
+responses that come back, and routes each one to whatever business module owns the slave
+it came from — carrying no business logic of its own. It touches no hardware: all I/O is
+injected as non-blocking callbacks, and it is driven from the main loop by a single
+`process()` call.
+
+- **Subscription dispatch by slave address** — a business module owns the devices it
+  talks to, so each entry in the subscription table claims a `slave_addr` and receives
+  that device's responses (zero-copy, as a reference-counted `nx_ref_msg`) on its own
+  queue. An optional `func` filter narrows an entry to one function code when two modules
+  split a device; `func = 0` takes everything from that address. One response can reach
+  several subscribers at once. A response no subscription claims is discarded — a master
+  answers nothing, so there is nothing to emit in its place.
+- **Timeouts belong to the business module** — this module transmits and dispatches; it
+  keeps no record of which requests are outstanding. A module that needs to know an answer
+  never came notes when it sent and decides for itself when to retry or give up. An empty
+  response queue means the answer has not arrived, not that anything failed.
+- **Request builders** — one per function code (`nx_modbus_rtu_master_read_holding_regs`,
+  `..._write_multiple_regs`, and so on) builds a well-formed frame, stamps its CRC and
+  queues it. They take only the pool and the request queue, so a business module needs no
+  handle on the master. Each refuses what the protocol does not allow — a quantity outside
+  its range, a byte count that disagrees with it, a broadcast read — rather than spending
+  a round trip to be told the same thing.
+- **Length-based framing** — every response's length follows from its own bytes (5 for an
+  exception, 8 for a write confirmation, `3 + byte_count + 2` for a read), so RX needs no
+  inter-character (T3.5) timer — robust on a busy bus where arrival timing cannot be
+  trusted. A partial frame is held across calls and dispatched only once complete. Resync
+  after an unsupported code or a bad CRC drops one byte and retries. On TX a 3.5-character
+  gap (derived from `baud_rate`) follows each frame.
+- **One step per call** — each `process()` advances the transmit path by a single state, so
+  no call chains several frames onto the wire. With `is_busy` supplied, a frame in flight
+  blocks both the next `write()` and the release of the direction pin, which is what keeps
+  a shared RS-485 segment from being driven by two frames at once.
+- **Response inspection** — a subscriber pops a whole ADU with its CRC already checked.
+  `nx_modbus_rtu_master_rsp_is_exception()` tells a refusal from an answer and yields the
+  exception code; `nx_modbus_rtu_master_rsp_data()` finds a read response's payload and
+  its length, pointing into the message rather than copying it.
+- **Releasing an instance** — `nx_modbus_rtu_master_deinit()` hands back the pool block of
+  a frame caught mid-transmit, drops the direction pin and discards a partial response. The
+  request queue is left alone: what is still in it belongs to whoever pushed it.
+
+```c
+#include "nx_modbus_rtu_master.h"
+
+/* two business modules, one device each */
+const nx_modbus_rtu_master_sub_t subs[] = {
+    { 0x11u, 0u, &q_pump  },      /* every response from 0x11 */
+    { 0x22u, 0u, &q_meter },      /* every response from 0x22 */
+};
+
+nx_modbus_rtu_master_t     master;
+nx_modbus_rtu_master_cfg_t cfg = {
+    .baud_rate     = 115200u,        /* derives the 3.5-char TX gap */
+    .pool          = &pool,          /* tiered pool for messages */
+    .rx_buf        = rx_buf,
+    .rx_size       = sizeof(rx_buf),
+    .subs          = subs,
+    .subs_count    = 2u,
+    .request_queue = &request_queue, /* what modules push here gets sent */
+    .read          = uart_read,      /* injected non-blocking I/O */
+    .write         = uart_write,
+    .get_us        = board_micros,   /* is_busy NULL => write is blocking */
+};
+nx_modbus_rtu_master_init(&master, &cfg);
+
+/* a business module asks for 10 registers; the reply lands on its own queue */
+nx_modbus_rtu_master_read_holding_regs(&pool, &request_queue, 0x11u, 0x0000u, 10u);
+
+for (;;) {
+    nx_modbus_rtu_master_process(&master);        /* TX pump + RX dispatch */
+    pump_business(&q_pump, &request_queue, &pool);   /* drain inbox, ask again */
+}
+```
+
+> **Note:** RTU frames carry no transaction id, so a response is matched to a request by
+> slave address and function code alone. Two outstanding requests to the same slave with
+> the same function code come back as two responses nothing in the frames can tell apart —
+> a module that needs strict pairing should keep one request per slave in flight. The same
+> is true of a late response to a request already given up on: it arrives looking exactly
+> like an answer to the current one.
 
 
 ### nx_tp_sdu — transport-layer service data unit
