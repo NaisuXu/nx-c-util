@@ -40,7 +40,7 @@
 
 #include "src/middleware/nx_can_isotp.h"
 #include "src/middleware/nx_uds_svc_sec.h"
-#include "src/middleware/nx_uds_svc_std.h"
+#include "src/middleware/nx_uds_svc_session.h"
 #include "src/middleware/nx_uds_tp_bind.h"
 #include "src/middleware/nx_uds_svc_transfer.h"
 
@@ -124,7 +124,7 @@ static nx_uds_server_t    g_srv;
 static nx_uds_tp_bind_t   g_bind;
 static nx_uds_svc_sec_t       g_sec;
 static nx_uds_svc_transfer_t g_xfer;
-static nx_uds_svc_std_session_cfg_t g_session_cfg;
+static nx_uds_svc_session_cfg_t g_session_cfg;
 
 /* ------------------------------------------------------------------ */
 /* The bus                                                            */
@@ -394,20 +394,20 @@ static const uint8_t g_reset_subs[] = { NX_UDS_RESET_HARD, NX_UDS_RESET_SOFT };
 static const uint8_t g_sec_subs[] = {
     NX_UDS_SVC_SEC_SEED_SUB(SEC_LEVEL), NX_UDS_SVC_SEC_KEY_SUB(SEC_LEVEL)
 };
-static const uint8_t g_tp_subs[] = { NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
+static const uint8_t g_tp_subs[] = { NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB };
 
 static const nx_uds_svc_sec_level_t g_sec_levels[] = {
     { SEC_LEVEL, SEC_SEED_LEN, SEC_KEY_LEN }
 };
 static uint8_t g_seed_buf[SEC_SEED_LEN];
 
-static nx_uds_svc_std_reset_cfg_t g_reset_cfg = {
+static nx_uds_svc_session_reset_cfg_t g_reset_cfg = {
     .do_fn = app_reset, .allow_fn = NULL, .user = NULL, .power_down_time = 0u
 };
 
 static const nx_uds_service_t g_services[] = {
     {   .sid = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler = nx_uds_svc_std_session_control, .user = &g_session_cfg,
+        .handler = nx_uds_svc_session_control, .user = &g_session_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION | NX_UDS_SVC_ANSWER_FUNCTIONAL,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_session_subs,
@@ -415,7 +415,7 @@ static const nx_uds_service_t g_services[] = {
         .sub_session_masks = NULL, .min_len = 2u, .max_len = 2u },
 
     {   .sid = NX_UDS_SID_ECU_RESET,
-        .handler = nx_uds_svc_std_ecu_reset, .user = &g_reset_cfg,
+        .handler = nx_uds_svc_session_ecu_reset, .user = &g_reset_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_reset_subs,
@@ -425,7 +425,7 @@ static const nx_uds_service_t g_services[] = {
     {   /* Answered functionally as well, since a tester keeps a whole network alive
          * with one broadcast rather than one request per ECU. */
         .sid = NX_UDS_SID_TESTER_PRESENT,
-        .handler = nx_uds_svc_std_tester_present, .user = NULL,
+        .handler = nx_uds_svc_session_tester_present, .user = NULL,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION | NX_UDS_SVC_ANSWER_FUNCTIONAL,
         .session_mask = NX_UDS_SESSION_MASK_ALL, .sec_level = 0u,
         .subs = g_tp_subs,
@@ -646,7 +646,7 @@ static void expect_no_losses(void)
 static void demo_single_frame(void)
 {
     static const uint8_t enter_extended[] = { 0x10u, NX_UDS_SESSION_EXTENDED };
-    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
+    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB };
 
     printf("1. a request and its answer, one frame each\n");
     setup();
@@ -797,9 +797,9 @@ static void demo_flash(void)
 /* ------------------------------------------------------------------ */
 static void demo_functional(void)
 {
-    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
+    static const uint8_t tester_present[] = { 0x3Eu, NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB };
     static const uint8_t suppressed[] = {
-        0x3Eu, NX_UDS_SVC_STD_TESTER_PRESENT_SUB | NX_UDS_SUPPRESS_POS_RSP_BIT
+        0x3Eu, NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB | NX_UDS_SUPPRESS_POS_RSP_BIT
     };
     static const uint8_t unknown_svc[] = { 0x22u, 0xF1u, 0x90u };
     nx_ref_msg_t *m = NULL;

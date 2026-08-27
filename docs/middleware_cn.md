@@ -460,6 +460,40 @@ for (;;) {
 - **服务表行** —— `nx_uds_service_t` 以数据形式描述一个服务：其标识符、处理器、所需的会话
   与安全等级、可用的子功能（以及各子功能可选的可达会话），还有其请求落在一个怎样的长度窗口内。
 
+各 SID 按 ISO 14229-1 的功能单元归属分组。每个服务的处理器落在哪个模块里是数据而非代码：
+无需状态的那一小撮在 `nx_uds_svc_session`，安全访问握手自带状态机，在 `nx_uds_svc_sec`，
+传输序列共享一个状态机，在 `nx_uds_svc_transfer`。其余服务没有专门模块——由调用方用
+`nx_uds_service_t` 行与自带的处理器绑定。
+
+| SID | 服务 | 功能单元（ISO 14229-1:2020） | 模块 |
+|---|---|---|---|
+| 0x10 | DiagnosticSessionControl | 10 诊断与通信管理 | `nx_uds_svc_session` |
+| 0x11 | ECUReset | 10 诊断与通信管理 | `nx_uds_svc_session` |
+| 0x27 | SecurityAccess | 10 诊断与通信管理 | `nx_uds_svc_sec` |
+| 0x28 | CommunicationControl | 10 诊断与通信管理 | — |
+| 0x3E | TesterPresent | 10 诊断与通信管理 | `nx_uds_svc_session` |
+| 0x83 | AccessTimingParameter | 10 诊断与通信管理 | — |
+| 0x84 | SecuredDataTransmission | 10 诊断与通信管理 | — |
+| 0x85 | ControlDTCSetting | 10 诊断与通信管理 | — |
+| 0x86 | ResponseOnEvent | 10 诊断与通信管理 | — |
+| 0x87 | LinkControl | 10 诊断与通信管理 | — |
+| 0x22 | ReadDataByIdentifier | 11 数据传输 | — |
+| 0x23 | ReadMemoryByAddress | 11 数据传输 | — |
+| 0x24 | ReadScalingDataByIdentifier | 11 数据传输 | — |
+| 0x2A | ReadDataByPeriodicIdentifier | 11 数据传输 | — |
+| 0x2C | DynamicallyDefineDataIdentifier | 11 数据传输 | — |
+| 0x2E | WriteDataByIdentifier | 11 数据传输 | — |
+| 0x3D | WriteMemoryByAddress | 11 数据传输 | — |
+| 0x14 | ClearDiagnosticInformation | 12 存储数据传输 | — |
+| 0x19 | ReadDTCInformation | 12 存储数据传输 | — |
+| 0x2F | InputOutputControlByIdentifier | 13 输入输出与例程控制 | — |
+| 0x31 | RoutineControl | 13 输入输出与例程控制 | — |
+| 0x34 | RequestDownload | 15 上传下载 | `nx_uds_svc_transfer` |
+| 0x35 | RequestUpload | 15 上传下载 | `nx_uds_svc_transfer` |
+| 0x36 | TransferData | 15 上传下载 | `nx_uds_svc_transfer` |
+| 0x37 | RequestTransferExit | 15 上传下载 | `nx_uds_svc_transfer` |
+| 0x38 | RequestFileTransfer | 15 上传下载 | — |
+
 ```c
 #include "nx_uds.h"
 
@@ -593,7 +627,7 @@ static void server_setup(void)
 > 从未专门发给本服务器的广播 TesterPresent。被拒绝的请求如何处理由调用方决定：用 0x21
 > 回复它会让客户端重发，而对一条功能性寻址的请求直接丢弃也是正确的。
 
-### nx_uds_svc_std —— 始终需要的服务处理器
+### nx_uds_svc_session —— 始终需要的服务处理器
 
 无论还实现了什么，诊断服务器都应回答的三个服务：0x10 诊断会话控制、0x11 ECU 复位与
 0x3E 存在测试。每个都是占据普通服务表行的普通处理器，与应用自己的服务一同入表、以同样
@@ -613,7 +647,7 @@ static void server_setup(void)
 ```c
 #include "nx_uds.h"
 #include "nx_uds_server.h"
-#include "nx_uds_svc_std.h"
+#include "nx_uds_svc_session.h"
 
 static nx_uds_server_t srv;
 
@@ -623,7 +657,7 @@ static bool allow_session(void *user, uint8_t from, uint8_t to, uint8_t *nrc)
     return !driving_now();          /* 行驶中拒绝进入编程会话 */
 }
 
-static nx_uds_svc_std_session_cfg_t session_cfg = {
+static nx_uds_svc_session_cfg_t session_cfg = {
     .srv      = &srv,
     .allow_fn = allow_session,
 };
@@ -638,7 +672,7 @@ static void do_reset(void *user, uint8_t reset_type)
     }
 }
 
-static nx_uds_svc_std_reset_cfg_t reset_cfg = {
+static nx_uds_svc_session_reset_cfg_t reset_cfg = {
     .do_fn           = do_reset,
     .power_down_time = 0xFEu,            /* 没有可用的掉电时间 */
 };
@@ -650,12 +684,12 @@ static const uint8_t resets[] = {
     NX_UDS_RESET_HARD, NX_UDS_RESET_KEY_OFF_ON, NX_UDS_RESET_SOFT,
     NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN,
 };
-static const uint8_t tester_present_sub = NX_UDS_SVC_STD_TESTER_PRESENT_SUB;
+static const uint8_t tester_present_sub = NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB;
 
 static const nx_uds_service_t services[] = {
     {
         .sid          = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler      = nx_uds_svc_std_session_control,
+        .handler      = nx_uds_svc_session_control,
         .user         = &session_cfg,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -666,7 +700,7 @@ static const nx_uds_service_t services[] = {
     },
     {
         .sid          = NX_UDS_SID_ECU_RESET,
-        .handler      = nx_uds_svc_std_ecu_reset,
+        .handler      = nx_uds_svc_session_ecu_reset,
         .user         = &reset_cfg,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -677,7 +711,7 @@ static const nx_uds_service_t services[] = {
     },
     {
         .sid          = NX_UDS_SID_TESTER_PRESENT,
-        .handler      = nx_uds_svc_std_tester_present,
+        .handler      = nx_uds_svc_session_tester_present,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
         .subs         = &tester_present_sub,

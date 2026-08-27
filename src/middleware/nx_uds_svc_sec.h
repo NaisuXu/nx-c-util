@@ -112,7 +112,7 @@ typedef bool (*nx_uds_svc_sec_verify_fn)(void *user, uint8_t level,
  * Called after the unlock is recorded and its answer assembled, which is where
  * whatever unlocking permits gets started. Kept apart from
  * nx_uds_svc_sec_verify_fn so that judging a key stays a question that can be asked
- * and answered no without anything happening.
+ * and answered with nothing happening.
  *
  * @param  user  The @c user field of nx_uds_svc_sec_cfg_t.
  * @param  level Level now unlocked.

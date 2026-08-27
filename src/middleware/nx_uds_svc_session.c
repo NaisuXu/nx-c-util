@@ -1,8 +1,8 @@
 /**
- * @file    nx_uds_svc_std.c
+ * @file    nx_uds_svc_session.c
  * @brief   Implementation of the handlers for the always-needed services.
  */
-#include "nx_uds_svc_std.h"
+#include "nx_uds_svc_session.h"
 
 /* ------------------------------------------------------------------ */
 /* Shared                                                            */
@@ -30,7 +30,7 @@ static bool svc_answered_positively(const nx_uds_ctx_t *ctx)
 /* ------------------------------------------------------------------ */
 /* 0x3E TesterPresent                                                */
 /* ------------------------------------------------------------------ */
-nx_uds_disposition_t nx_uds_svc_std_tester_present(nx_uds_ctx_t *ctx, void *user)
+nx_uds_disposition_t nx_uds_svc_session_tester_present(nx_uds_ctx_t *ctx, void *user)
 {
     (void)user;
 
@@ -77,9 +77,9 @@ static uint16_t svc_window_counts(uint32_t us, uint32_t unit)
     return (uint16_t)counts;
 }
 
-nx_uds_disposition_t nx_uds_svc_std_session_control(nx_uds_ctx_t *ctx, void *user)
+nx_uds_disposition_t nx_uds_svc_session_control(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_svc_std_session_cfg_t *cfg = (nx_uds_svc_std_session_cfg_t *)user;
+    nx_uds_svc_session_cfg_t *cfg = (nx_uds_svc_session_cfg_t *)user;
     uint32_t p2      = 0u;
     uint32_t p2_star = 0u;
     uint16_t counts;
@@ -148,9 +148,9 @@ nx_uds_disposition_t nx_uds_svc_std_session_control(nx_uds_ctx_t *ctx, void *use
 /* ------------------------------------------------------------------ */
 /* 0x11 ECUReset                                                      */
 /* ------------------------------------------------------------------ */
-nx_uds_disposition_t nx_uds_svc_std_ecu_reset(nx_uds_ctx_t *ctx, void *user)
+nx_uds_disposition_t nx_uds_svc_session_ecu_reset(nx_uds_ctx_t *ctx, void *user)
 {
-    nx_uds_svc_std_reset_cfg_t *cfg = (nx_uds_svc_std_reset_cfg_t *)user;
+    nx_uds_svc_session_reset_cfg_t *cfg = (nx_uds_svc_session_reset_cfg_t *)user;
     uint32_t len = 2u;
     uint8_t  nrc = NX_UDS_NRC_CONDITIONS_NOT_CORRECT;
 

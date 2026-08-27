@@ -63,7 +63,7 @@ See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and 
 - [nx_can_isotp](docs/middleware_en.md#nx_can_isotp--iso-15765-2-docan--iso-tp-segmented-transport) — ISO 15765-2 (DoCAN / ISO-TP) segmented transport
 - [nx_uds](docs/middleware_en.md#nx_uds--iso-14229-vocabulary) — ISO 14229 vocabulary
 - [nx_uds_server](docs/middleware_en.md#nx_uds_server--iso-14229-diagnostic-server-ecu-side) — ISO 14229 diagnostic server (ECU side)
-- [nx_uds_svc_std](docs/middleware_en.md#nx_uds_svc_std--the-always-needed-service-handlers) — the always-needed service handlers
+- [nx_uds_svc_session](docs/middleware_en.md#nx_uds_svc_session--the-always-needed-service-handlers) — the always-needed service handlers
 - [nx_uds_svc_sec](docs/middleware_en.md#nx_uds_svc_sec--027-seedkey-exchange) — 0x27 seed/key exchange
 - [nx_uds_svc_transfer](docs/middleware_en.md#nx_uds_svc_transfer--moving-a-block-of-memory) — moving a block of memory
 - [nx_uds_tp_bind](docs/middleware_en.md#nx_uds_tp_bind--joining-the-server-to-a-transport) — joining the server to a transport

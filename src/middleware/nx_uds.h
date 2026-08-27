@@ -33,11 +33,9 @@ extern "C" {
  * NX_UDS_NEG_RSP_SID and names the service in its second byte.
  */
 typedef enum {
-    /* diagnostic and communication management */
+    /* diagnostic and communication management (ISO 14229-1:2020 functional unit 10) */
     NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL = 0x10,
     NX_UDS_SID_ECU_RESET                  = 0x11,
-    NX_UDS_SID_CLEAR_DIAGNOSTIC_INFO      = 0x14,
-    NX_UDS_SID_READ_DTC_INFORMATION       = 0x19,
     NX_UDS_SID_SECURITY_ACCESS            = 0x27,
     NX_UDS_SID_COMMUNICATION_CONTROL      = 0x28,
     NX_UDS_SID_TESTER_PRESENT             = 0x3E,
@@ -47,7 +45,7 @@ typedef enum {
     NX_UDS_SID_RESPONSE_ON_EVENT          = 0x86,
     NX_UDS_SID_LINK_CONTROL               = 0x87,
 
-    /* data transmission */
+    /* data transmission (functional unit 11) */
     NX_UDS_SID_READ_DATA_BY_IDENTIFIER    = 0x22,
     NX_UDS_SID_READ_MEMORY_BY_ADDRESS     = 0x23,
     NX_UDS_SID_READ_SCALING_DATA_BY_ID    = 0x24,
@@ -56,13 +54,15 @@ typedef enum {
     NX_UDS_SID_WRITE_DATA_BY_IDENTIFIER   = 0x2E,
     NX_UDS_SID_WRITE_MEMORY_BY_ADDRESS    = 0x3D,
 
-    /* stored data transmission and input/output control */
-    NX_UDS_SID_INPUT_OUTPUT_CONTROL_BY_ID = 0x2F,
+    /* stored data transmission (functional unit 12) */
+    NX_UDS_SID_CLEAR_DIAGNOSTIC_INFO      = 0x14,
+    NX_UDS_SID_READ_DTC_INFORMATION       = 0x19,
 
-    /* routine */
+    /* input/output and routine control (functional unit 13) */
+    NX_UDS_SID_INPUT_OUTPUT_CONTROL_BY_ID = 0x2F,
     NX_UDS_SID_ROUTINE_CONTROL            = 0x31,
 
-    /* upload and download */
+    /* upload and download (functional unit 15) */
     NX_UDS_SID_REQUEST_DOWNLOAD           = 0x34,
     NX_UDS_SID_REQUEST_UPLOAD             = 0x35,
     NX_UDS_SID_TRANSFER_DATA              = 0x36,

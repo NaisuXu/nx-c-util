@@ -31,7 +31,7 @@ int nx_uds_server_example_run(void);
  * @brief  Runs the always-needed-services example (0x10, 0x11, 0x3E, 0x27).
  * @return 0 on success.
  */
-int nx_uds_svc_std_example_run(void);
+int nx_uds_svc_session_example_run(void);
 
 /**
  * @brief  Runs the memory transfer example (0x34, 0x35, 0x36, 0x37).

@@ -1,5 +1,5 @@
 /**
- * @file    nx_uds_svc_std_example.c
+ * @file    nx_uds_svc_session_example.c
  * @brief   Exercises the services every server needs: 0x10, 0x11, 0x3E, 0x27.
  *
  * One server, one table holding the four library handlers and nothing else, and a
@@ -16,7 +16,7 @@
 #include <string.h>
 
 #include "src/middleware/nx_uds_svc_sec.h"
-#include "src/middleware/nx_uds_svc_std.h"
+#include "src/middleware/nx_uds_svc_session.h"
 
 #define LINK_ID     1u
 #define P2_US       50000u      /* 50 ms  -> 50 counts of 1 ms   */
@@ -144,13 +144,13 @@ static void app_granted(void *user, uint8_t level)
 }
 
 /* ---- the table ---- */
-static nx_uds_svc_std_session_cfg_t g_session_cfg = {
+static nx_uds_svc_session_cfg_t g_session_cfg = {
     .srv      = &g_srv,
     .allow_fn = app_allow_session,
     .user     = NULL
 };
 
-static nx_uds_svc_std_reset_cfg_t g_reset_cfg = {
+static nx_uds_svc_session_reset_cfg_t g_reset_cfg = {
     .do_fn           = app_do_reset,
     .allow_fn        = NULL,
     .user            = NULL,
@@ -175,7 +175,7 @@ static const uint8_t g_reset_subs[] = {
     NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN
 };
 
-static const uint8_t g_tp_subs[] = { NX_UDS_SVC_STD_TESTER_PRESENT_SUB };
+static const uint8_t g_tp_subs[] = { NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB };
 
 /* Both sub-functions of the one level offered. */
 static const uint8_t g_sec_subs[] = {
@@ -186,7 +186,7 @@ static const nx_uds_service_t g_services[] = {
     {   /* 0x10: reachable from every session, since a server that cannot be asked
          * to leave a session can only be power-cycled out of it. */
         .sid = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler = nx_uds_svc_std_session_control,
+        .handler = nx_uds_svc_session_control,
         .user = &g_session_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -196,7 +196,7 @@ static const nx_uds_service_t g_services[] = {
     },
     {   /* 0x11: a reset is not something the default session offers. */
         .sid = NX_UDS_SID_ECU_RESET,
-        .handler = nx_uds_svc_std_ecu_reset,
+        .handler = nx_uds_svc_session_ecu_reset,
         .user = &g_reset_cfg,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_NON_DEFAULT,
@@ -207,7 +207,7 @@ static const nx_uds_service_t g_services[] = {
     {   /* 0x3E: every session, and left unanswered when broadcast so that a link
          * full of servers does not answer at once. */
         .sid = NX_UDS_SID_TESTER_PRESENT,
-        .handler = nx_uds_svc_std_tester_present,
+        .handler = nx_uds_svc_session_tester_present,
         .user = NULL,
         .flags = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -740,9 +740,9 @@ static void demo_relock(void)
            (unsigned)nx_uds_server_sec_level(&g_srv));
 }
 
-int nx_uds_svc_std_example_run(void)
+int nx_uds_svc_session_example_run(void)
 {
-    printf("=== nx_uds_svc_std example ===\n");
+    printf("=== nx_uds_svc_session example ===\n");
 
     demo_session();
     demo_reset();
@@ -751,7 +751,7 @@ int nx_uds_svc_std_example_run(void)
     demo_lockout();
     demo_relock();
 
-    printf("nx_uds_svc_std example passed\n\n");
+    printf("nx_uds_svc_session example passed\n\n");
     return 0;
 }
 

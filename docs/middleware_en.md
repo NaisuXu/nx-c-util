@@ -576,6 +576,42 @@ Header-only, with no state and nothing to initialise.
   sub-functions it has and optionally the sessions each of those is available in, and
   the length window its requests fall in.
 
+The SIDs are grouped by the ISO 14229-1 functional unit they belong to. Which
+module carries the handler for each is data, not code: the small stateless set lives
+in `nx_uds_svc_session`, the security-access handshake carries its own state machine
+in `nx_uds_svc_sec`, and the transfer sequence shares one in `nx_uds_svc_transfer`.
+The rest have no dedicated module — the caller binds them with a `nx_uds_service_t`
+row and a handler of its own.
+
+| SID | Service | Functional unit (ISO 14229-1:2020) | Module |
+|---|---|---|---|
+| 0x10 | DiagnosticSessionControl | 10 Diagnostic and communication management | `nx_uds_svc_session` |
+| 0x11 | ECUReset | 10 Diagnostic and communication management | `nx_uds_svc_session` |
+| 0x27 | SecurityAccess | 10 Diagnostic and communication management | `nx_uds_svc_sec` |
+| 0x28 | CommunicationControl | 10 Diagnostic and communication management | — |
+| 0x3E | TesterPresent | 10 Diagnostic and communication management | `nx_uds_svc_session` |
+| 0x83 | AccessTimingParameter | 10 Diagnostic and communication management | — |
+| 0x84 | SecuredDataTransmission | 10 Diagnostic and communication management | — |
+| 0x85 | ControlDTCSetting | 10 Diagnostic and communication management | — |
+| 0x86 | ResponseOnEvent | 10 Diagnostic and communication management | — |
+| 0x87 | LinkControl | 10 Diagnostic and communication management | — |
+| 0x22 | ReadDataByIdentifier | 11 Data transmission | — |
+| 0x23 | ReadMemoryByAddress | 11 Data transmission | — |
+| 0x24 | ReadScalingDataByIdentifier | 11 Data transmission | — |
+| 0x2A | ReadDataByPeriodicIdentifier | 11 Data transmission | — |
+| 0x2C | DynamicallyDefineDataIdentifier | 11 Data transmission | — |
+| 0x2E | WriteDataByIdentifier | 11 Data transmission | — |
+| 0x3D | WriteMemoryByAddress | 11 Data transmission | — |
+| 0x14 | ClearDiagnosticInformation | 12 Stored data transmission | — |
+| 0x19 | ReadDTCInformation | 12 Stored data transmission | — |
+| 0x2F | InputOutputControlByIdentifier | 13 Input/output and routine control | — |
+| 0x31 | RoutineControl | 13 Input/output and routine control | — |
+| 0x34 | RequestDownload | 15 Upload and download | `nx_uds_svc_transfer` |
+| 0x35 | RequestUpload | 15 Upload and download | `nx_uds_svc_transfer` |
+| 0x36 | TransferData | 15 Upload and download | `nx_uds_svc_transfer` |
+| 0x37 | RequestTransferExit | 15 Upload and download | `nx_uds_svc_transfer` |
+| 0x38 | RequestFileTransfer | 15 Upload and download | — |
+
 ```c
 #include "nx_uds.h"
 
@@ -728,7 +764,7 @@ static void server_setup(void)
 > request: answering it with 0x21 asks the client to send it again, and dropping
 > it is also correct for one that was functionally addressed.
 
-### nx_uds_svc_std — the always-needed service handlers
+### nx_uds_svc_session — the always-needed service handlers
 
 The three services a diagnostic server is expected to answer whatever else it
 implements: 0x10 DiagnosticSessionControl, 0x11 ECUReset and 0x3E TesterPresent.
@@ -758,7 +794,7 @@ answers wrongly rather than one that refuses to start.
 ```c
 #include "nx_uds.h"
 #include "nx_uds_server.h"
-#include "nx_uds_svc_std.h"
+#include "nx_uds_svc_session.h"
 
 static nx_uds_server_t srv;
 
@@ -768,7 +804,7 @@ static bool allow_session(void *user, uint8_t from, uint8_t to, uint8_t *nrc)
     return !driving_now();          /* refuse programming while driving */
 }
 
-static nx_uds_svc_std_session_cfg_t session_cfg = {
+static nx_uds_svc_session_cfg_t session_cfg = {
     .srv      = &srv,
     .allow_fn = allow_session,
 };
@@ -783,7 +819,7 @@ static void do_reset(void *user, uint8_t reset_type)
     }
 }
 
-static nx_uds_svc_std_reset_cfg_t reset_cfg = {
+static nx_uds_svc_session_reset_cfg_t reset_cfg = {
     .do_fn           = do_reset,
     .power_down_time = 0xFEu,            /* no power-down time available */
 };
@@ -795,12 +831,12 @@ static const uint8_t resets[] = {
     NX_UDS_RESET_HARD, NX_UDS_RESET_KEY_OFF_ON, NX_UDS_RESET_SOFT,
     NX_UDS_RESET_ENABLE_RAPID_POWER_SHUT_DOWN,
 };
-static const uint8_t tester_present_sub = NX_UDS_SVC_STD_TESTER_PRESENT_SUB;
+static const uint8_t tester_present_sub = NX_UDS_SVC_SESSION_TESTER_PRESENT_SUB;
 
 static const nx_uds_service_t services[] = {
     {
         .sid          = NX_UDS_SID_DIAGNOSTIC_SESSION_CONTROL,
-        .handler      = nx_uds_svc_std_session_control,
+        .handler      = nx_uds_svc_session_control,
         .user         = &session_cfg,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -811,7 +847,7 @@ static const nx_uds_service_t services[] = {
     },
     {
         .sid          = NX_UDS_SID_ECU_RESET,
-        .handler      = nx_uds_svc_std_ecu_reset,
+        .handler      = nx_uds_svc_session_ecu_reset,
         .user         = &reset_cfg,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
@@ -822,7 +858,7 @@ static const nx_uds_service_t services[] = {
     },
     {
         .sid          = NX_UDS_SID_TESTER_PRESENT,
-        .handler      = nx_uds_svc_std_tester_present,
+        .handler      = nx_uds_svc_session_tester_present,
         .flags        = NX_UDS_SVC_HAS_SUB_FUNCTION,
         .session_mask = NX_UDS_SESSION_MASK_ALL,
         .subs         = &tester_present_sub,

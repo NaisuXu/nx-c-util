@@ -8,7 +8,7 @@
  *   - nx_can_isotp_example.c        -> nx_can_isotp_example_run()
  *   - nx_uds_client_example.c       -> nx_uds_client_example_run()
  *   - nx_uds_server_example.c       -> nx_uds_server_example_run()
- *   - nx_uds_svc_std_example.c       -> nx_uds_svc_std_example_run()
+ *   - nx_uds_svc_session_example.c       -> nx_uds_svc_session_example_run()
  *   - nx_uds_svc_transfer_example.c  -> nx_uds_svc_transfer_example_run()
  *   - nx_uds_tp_bind_example.c      -> nx_uds_tp_bind_example_run()
  */
@@ -25,7 +25,7 @@ int main(void)
     rc |= nx_can_isotp_example_run();
     rc |= nx_uds_client_example_run();
     rc |= nx_uds_server_example_run();
-    rc |= nx_uds_svc_std_example_run();
+    rc |= nx_uds_svc_session_example_run();
     rc |= nx_uds_svc_transfer_example_run();
     rc |= nx_uds_tp_bind_example_run();
 
