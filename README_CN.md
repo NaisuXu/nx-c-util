@@ -8,11 +8,9 @@
 
 每个组件都遵循同样的设计理念：
 
-- **纯静态** —— 所有存储都由调用者提供；库不使用任何动态内存，也不依赖
-  `malloc`/`free`，适用于无堆的目标平台。
-- **确定性** —— 操作可预测、恒定耗时、无隐藏开销，非常适合实时系统。
-- **可移植** —— 标准 C11，无平台相关依赖；在 Windows、Linux、macOS 上都能构建
-  和运行。
+- **纯静态** —— 所有存储都由调用者提供；库不使用任何动态内存，也不依赖 `malloc`/`free`，适用于没有堆的目标平台。
+- **确定性** —— 操作可预测、耗时恒定、无隐藏开销，非常适合实时系统。
+- **可移植** —— 标准 C11、无平台相关依赖；在 Windows、Linux、macOS 上都能构建和运行，且构建方式一致。
 
 ## 目录结构
 
@@ -30,9 +28,7 @@ nx-c-util/
     └── device/       # 设备驱动使用示例
 ```
 
-每个模块都设计为可独立使用。在你的项目中集成时，只需拷贝所需的 `.c` 和 `.h` 
-文件即可。头文件使用单层 include（如 `#include "nx_list.h"`）无子目录前缀，
-因此把拷贝文件所在的目录加入你的 include 路径即可。
+每个模块都设计为可以独立使用。集成进你的项目时，只需把用到的 `.c` 和 `.h` 文件拷过来即可。头文件采用单层 include（如 `#include "nx_list.h"`），不带子目录前缀，所以把拷贝文件所在目录加入你的 include 路径就行。
 
 ## 模块
 
@@ -54,16 +50,16 @@ nx-c-util/
 - [nx_can_bus](docs/middleware_cn.md#nx_can_bus--can--can-fd-帧结构与辅助函数) — CAN / CAN FD 帧结构与辅助函数
 - [nx_modbus_rtu](docs/middleware_cn.md#nx_modbus_rtu--modbus-rtu-帧结构与-crc) — Modbus RTU 帧结构与 CRC
 - [nx_modbus_rtu_slave](docs/middleware_cn.md#nx_modbus_rtu_slave--事件驱动的-rtu-从站帧--订阅分发) — 事件驱动的 RTU 从站：帧 → 订阅分发
-- [nx_modbus_rtu_master](docs/middleware_cn.md#nx_modbus_rtu_master--事件驱动的-rtu-主站队列--线路--订阅分发) —— 事件驱动的 RTU 主站：队列 → 线路 → 订阅分发
+- [nx_modbus_rtu_master](docs/middleware_cn.md#nx_modbus_rtu_master--事件驱动的-rtu-主站队列--线路--订阅分发) — 事件驱动的 RTU 主站：队列 → 线路 → 订阅分发
 - [nx_tp_sdu](docs/middleware_cn.md#nx_tp_sdu--传输层服务数据单元) — 传输层服务数据单元
 - [nx_can_isotp](docs/middleware_cn.md#nx_can_isotp--iso-15765-2docan--iso-tp分段传输) — ISO 15765-2（DoCAN / ISO-TP）分段传输
-- [nx_uds](docs/middleware_cn.md#nx_uds--iso-14229-词汇表) —— ISO 14229 词汇表
-- [nx_uds_server](docs/middleware_cn.md#nx_uds_server--iso-14229-诊断服务器ecu-侧) —— ISO 14229 诊断服务器（ECU 侧）
-- [nx_uds_svc_session](docs/middleware_cn.md#nx_uds_svc_session--始终需要的服务处理器) —— 始终需要的服务处理器
-- [nx_uds_svc_sec](docs/middleware_cn.md#nx_uds_svc_sec--027-种子密钥交换) —— 0x27 种子/密钥交换
-- [nx_uds_svc_transfer](docs/middleware_cn.md#nx_uds_svc_transfer--搬移一块内存) —— 搬移一块内存
-- [nx_uds_tp_bind](docs/middleware_cn.md#nx_uds_tp_bind--把服务器接到某个传输层) —— 把服务器接到某个传输层
-- [nx_uds_client](docs/middleware_cn.md#nx_uds_client--iso-14229-诊断客户端测试工具侧) —— ISO 14229 诊断客户端（测试工具侧）
+- [nx_uds](docs/middleware_cn.md#nx_uds--iso-14229-词汇表) — ISO 14229 词汇表
+- [nx_uds_server](docs/middleware_cn.md#nx_uds_server--iso-14229-诊断服务器ecu-侧) — ISO 14229 诊断服务器（ECU 侧）
+- [nx_uds_svc_session](docs/middleware_cn.md#nx_uds_svc_session--始终需要的服务处理器) — 始终需要的服务处理器
+- [nx_uds_svc_sec](docs/middleware_cn.md#nx_uds_svc_sec--027-种子密钥交换) — 0x27 种子/密钥交换
+- [nx_uds_svc_transfer](docs/middleware_cn.md#nx_uds_svc_transfer--搬移一块内存) — 搬移一块内存
+- [nx_uds_tp_bind](docs/middleware_cn.md#nx_uds_tp_bind--把服务器接到某个传输层) — 把服务器接到某个传输层
+- [nx_uds_client](docs/middleware_cn.md#nx_uds_client--iso-14229-诊断客户端测试工具侧) — ISO 14229 诊断客户端（测试工具侧）
 
 详细说明和示例请参阅[中间件模块文档](docs/middleware_cn.md)。
 
@@ -81,13 +77,9 @@ nx-c-util/
 
 ## 使用
 
-库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`、
-`src/device/`），可以直接拖进你的项目 —— 大多数模块除了标准 C 外没有依赖，可以独立
-使用。头文件使用单层 include（如 `#include "nx_list.h"`），因此把拷贝文件所在的
-目录加入你的 include 路径即可。
+库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`、`src/device/`），可以直接拖进你的项目——大多数模块除了标准 C 之外没有任何依赖，可以独立使用。头文件采用单层 include（如 `#include "nx_list.h"`），所以把拷贝文件所在目录加入你的 include 路径即可。
 
-`examples/core/`、`examples/middleware/`、`examples/algo/` 和 `examples/device/` 目录
-包含每个模块可运行的用法示例，通过 CMake 驱动，因此在任何平台上都以相同方式构建。
+`examples/core/`、`examples/middleware/`、`examples/algo/` 和 `examples/device/` 目录里装有每个模块的可运行示例，全部由 CMake 驱动，因此在任何平台上都以相同方式构建。
 
 ### 构建并运行示例
 
@@ -129,8 +121,7 @@ cmake --build build
 
 ### 选择生成器
 
-`cmake -S . -B build` 使用你平台的默认生成器，多数情况下已经够用。要显式指定一个，
-传入 `-G`：
+`cmake -S . -B build` 使用你平台上的默认生成器，多数情况下已经够用。要显式指定一个，传 `-G` 即可：
 
 ```sh
 # Windows, MinGW toolchain
