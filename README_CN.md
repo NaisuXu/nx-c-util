@@ -20,7 +20,7 @@ nx-c-util/
 │   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log）
 │   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, modbus_rtu_slave, modbus_rtu_master, can_bus, tp_sdu, can_isotp）
 │   ├── algo/         # 算法（crc, sha256）
-│   └── device/       # 平台无关的设备驱动（ws2812）
+│   └── device/       # 平台无关的设备驱动（ws2812, ssd1306）
 └── examples/
     ├── core/         # 核心模块使用示例
     ├── middleware/   # 中间件模块使用示例
@@ -71,6 +71,7 @@ nx-c-util/
 
 ### 设备模块
 - [nx_ws2812](docs/device_cn.md#nx_ws2812--ws2812b-rgb-灯带驱动) — WS2812/WS2812B RGB LED 灯带驱动
+- [nx_ssd1306](docs/device_cn.md#nx_ssd1306--ssd1306-系列-oled-控制器驱动) — SSD1306 系列 OLED 控制器驱动
 
 详细说明和示例请参阅[设备模块文档](docs/device_cn.md)。
 
@@ -98,7 +99,7 @@ cmake --build build
   ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer, coro）
   ./build/nx_middleware_examples  # 中间件模块（modbus_rtu_slave, modbus_rtu_master, can_isotp）
   ./build/nx_algo_examples        # 算法模块（crc, sha256）
-  ./build/nx_device_examples      # 设备驱动（ws2812）
+  ./build/nx_device_examples      # 设备驱动（ws2812, ssd1306）
   ```
 
 - **Windows (MinGW / MSYS)**

@@ -14,6 +14,8 @@ extern "C" {
 
 /** Run the nx_ws2812 usage examples. Returns 0 on success, non-zero on failure. */
 int nx_ws2812_example_run(void);
+/** Run the nx_ssd1306 usage examples. Returns 0 on success, non-zero on failure. */
+int nx_ssd1306_example_run(void);
 
 #ifdef __cplusplus
 }
