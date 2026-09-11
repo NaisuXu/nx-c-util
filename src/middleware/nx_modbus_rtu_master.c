@@ -33,9 +33,9 @@ enum {
  * @brief Total ADU length for a response, from its own bytes.
  *
  * Every response's length follows from what has already arrived: the exception flag
- * makes it 5, a read response carries a byte count at offset 2, and the write
- * confirmations are a fixed 8. This is what lets RX slice by length with no
- * inter-character timer.
+ * makes it 5, a read response (01/02/03/04, and 17's read half) carries a byte count
+ * at offset 2, and the write confirmations are a fixed 8. This is what lets RX slice
+ * by length with no inter-character timer.
  *
  * @param  cmd   Function code as received (exception flag still set, if any).
  * @param  p     Frame start.
@@ -54,6 +54,7 @@ static size_t response_len(uint8_t cmd, const uint8_t *p, size_t avail)
     case NX_MODBUS_FC_READ_DISCRETE_INPUTS:
     case NX_MODBUS_FC_READ_HOLDING_REGS:
     case NX_MODBUS_FC_READ_INPUT_REGS:
+    case NX_MODBUS_FC_READ_WRITE_REGS:
         if (avail < 3u) {
             return SIZE_MAX;                        /* need byte_count at offset 2 */
         }
@@ -563,6 +564,59 @@ nx_modbus_rtu_master_ret_t nx_modbus_rtu_master_write_multiple_regs(nx_tiered_me
                        start_addr, qty, regs, regs_len, (size_t)qty * 2u);
 }
 
+nx_modbus_rtu_master_ret_t nx_modbus_rtu_master_read_write_regs(nx_tiered_mem_pool_t *pool,
+                                                                nx_queue_t           *request_queue,
+                                                                uint8_t               slave_addr,
+                                                                uint16_t              rd_addr,
+                                                                uint16_t              rd_qty,
+                                                                uint16_t              wr_addr,
+                                                                uint16_t              wr_qty,
+                                                                const uint8_t        *regs,
+                                                                size_t                regs_len)
+{
+    /* A broadcast read would ask every slave on the bus to answer at once, so the
+     * exchange is refused for address 0 like the other read builders. */
+    nx_modbus_rtu_master_ret_t ret = read_allowed(slave_addr, rd_qty, 125u);
+    if (ret != NX_MODBUS_RTU_MASTER_OK) {
+        return ret;
+    }
+    if (pool == NULL || request_queue == NULL || regs == NULL) {
+        return NX_MODBUS_RTU_MASTER_ERR_PARAM;
+    }
+    /* 0x17 carries two quantities; the write half has its own tighter protocol range
+     * (121 registers, since the frame also holds the read half) and the byte count
+     * must carry exactly two bytes per written register. */
+    if (wr_qty < 1u || wr_qty > 121u || regs_len != (size_t)wr_qty * 2u) {
+        return NX_MODBUS_RTU_MASTER_ERR_PARAM;
+    }
+
+    /* addr+cmd + rd_addr(2) + rd_qty(2) + wr_addr(2) + wr_qty(2) + byte_count(1)
+     * + write data + crc(2) */
+    const size_t req_len = sizeof(nx_modbus_rtu_req_rw_t) + regs_len + 2u;
+
+    nx_ref_msg_t *msg = nx_ref_msg_alloc(pool, req_len);
+    if (msg == NULL) {
+        return NX_MODBUS_RTU_MASTER_ERR_NOMEM;
+    }
+
+    nx_modbus_rtu_req_rw_t *r = (nx_modbus_rtu_req_rw_t *)nx_ref_msg_data(msg);
+    r->addr = slave_addr;
+    r->cmd  = NX_MODBUS_FC_READ_WRITE_REGS;
+    /* 16-bit fields go on the wire high byte first. */
+    r->rd_addr_h = (uint8_t)(rd_addr >> 8);
+    r->rd_addr_l = (uint8_t)(rd_addr & 0xFFu);
+    r->rd_qty_h  = (uint8_t)(rd_qty >> 8);
+    r->rd_qty_l  = (uint8_t)(rd_qty & 0xFFu);
+    r->wr_addr_h = (uint8_t)(wr_addr >> 8);
+    r->wr_addr_l = (uint8_t)(wr_addr & 0xFFu);
+    r->wr_qty_h  = (uint8_t)(wr_qty >> 8);
+    r->wr_qty_l  = (uint8_t)(wr_qty & 0xFFu);
+    r->byte_count = (uint8_t)regs_len;
+    memcpy(r->payload, regs, regs_len);
+
+    return request_send(msg, request_queue, req_len);
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API: response inspection                                    */
 /* ------------------------------------------------------------------ */
@@ -592,7 +646,8 @@ const uint8_t *nx_modbus_rtu_master_rsp_data(const uint8_t *frame, size_t flen, 
 
     const uint8_t cmd = frame[1];
     if (cmd != NX_MODBUS_FC_READ_COILS && cmd != NX_MODBUS_FC_READ_DISCRETE_INPUTS &&
-        cmd != NX_MODBUS_FC_READ_HOLDING_REGS && cmd != NX_MODBUS_FC_READ_INPUT_REGS) {
+        cmd != NX_MODBUS_FC_READ_HOLDING_REGS && cmd != NX_MODBUS_FC_READ_INPUT_REGS &&
+        cmd != NX_MODBUS_FC_READ_WRITE_REGS) {
         return NULL;    /* an exception or a write confirmation carries no payload */
     }
 

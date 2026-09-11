@@ -48,6 +48,13 @@ static size_t frame_len(uint8_t cmd, const uint8_t *p, size_t avail)
         }
         /* addr+cmd + start(2) + qty(2) + byte_count(1) + data(bc) + crc(2) */
         return (size_t)p[6] + 9u;
+    case NX_MODBUS_FC_READ_WRITE_REGS:
+        if (avail < 11u) {
+            return SIZE_MAX;                        /* need byte_count at offset 10 */
+        }
+        /* addr+cmd + rd_addr(2) + rd_qty(2) + wr_addr(2) + wr_qty(2)
+         * + byte_count(1) + data(bc) + crc(2) */
+        return (size_t)p[10] + 13u;
     default:
         return 0u;                                 /* unsupported */
     }
@@ -60,17 +67,23 @@ static size_t frame_len(uint8_t cmd, const uint8_t *p, size_t avail)
  * reported as it was asked for rather than wrapped: a request for 24 registers from
  * 0xFFF8 yields hi = 0x1000F. No subscription can contain such a span, so it is
  * rejected by the containment check like any other out-of-range request.
+ *
+ * For 0x17 the span is the written range: it is the half that changes state, and the
+ * only one a subscription's containment can be judged against.
  */
 static void request_span(uint8_t cmd, const uint8_t *f, uint16_t *lo, uint32_t *hi)
 {
-    uint16_t a = (uint16_t)(((uint16_t)f[2] << 8) | f[3]);   /* address field */
+    /* The written range starts at offset 6 for 0x17; every other code at offset 2. */
+    const size_t base = (cmd == NX_MODBUS_FC_READ_WRITE_REGS) ? 6u : 2u;
+
+    uint16_t a = (uint16_t)(((uint16_t)f[base] << 8) | f[base + 1u]);  /* address field */
 
     *lo = a;
 
     if (cmd == NX_MODBUS_FC_WRITE_SINGLE_COIL || cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
         *hi = a;                                             /* single address */
     } else {
-        uint16_t q = (uint16_t)(((uint16_t)f[4] << 8) | f[5]);  /* quantity */
+        uint16_t q = (uint16_t)(((uint16_t)f[base + 2u] << 8) | f[base + 3u]);  /* quantity */
         *hi = (q == 0u) ? a : ((uint32_t)a + q - 1u);
     }
 }
@@ -122,6 +135,18 @@ static uint8_t request_value_exc(uint8_t cmd, const uint8_t *f)
             return NX_MODBUS_EXC_ILLEGAL_DATA_VALUE;
         }
         break;
+    case NX_MODBUS_FC_READ_WRITE_REGS: {
+        /* Two independent quantities and one byte_count: f[4..5] is the read quantity,
+         * f[8..9] the write quantity, and f[10] the write byte count. */
+        const uint16_t wr_qty = (uint16_t)(((uint16_t)f[8] << 8) | f[9]);
+        if (qty < 1u || qty > 125u) {                  /* registers to read */
+            return NX_MODBUS_EXC_ILLEGAL_DATA_VALUE;
+        }
+        if (wr_qty < 1u || wr_qty > 121u || f[10] != (uint8_t)(wr_qty * 2u)) {
+            return NX_MODBUS_EXC_ILLEGAL_DATA_VALUE;
+        }
+        break;
+    }
     default:
         break;                                         /* 06: any register value is legal */
     }

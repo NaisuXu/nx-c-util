@@ -633,6 +633,96 @@ int nx_modbus_rtu_master_example_run(void)
         printf("  OK: write-multiple-regs frame built with the right byte count\n");
     }
 
+    /* ---- 11b. read/write multiple registers: one frame, two ranges ---- */
+    {
+        nx_modbus_rtu_master_t m17;
+        nx_modbus_rtu_master_cfg_t c17 = cfg;
+        assert(nx_modbus_rtu_master_init(&m17, &c17));
+
+        /* The write half asks for 2 registers, the read half for 3, and the two ranges
+         * are independent - here they do not even sit next to each other. */
+        const uint8_t regs[4] = { 0x00, 0x2A, 0x01, 0x00 };   /* 42, 256 */
+        memset(&g_io, 0, sizeof(g_io));
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0x0200u, 3u, 0x0100u, 2u,
+                                                    regs, sizeof(regs))
+               == NX_MODBUS_RTU_MASTER_OK);
+        pump_master(&m17, 4);
+
+        /* addr+cmd + rd_addr(2) + rd_qty(2) + wr_addr(2) + wr_qty(2) + bc(1) + data(4)
+         * + crc(2) = 17. Note the byte count sits at offset 10, after both ranges. */
+        uint8_t want[17];
+        want[0]  = ADDR_METER;
+        want[1]  = NX_MODBUS_FC_READ_WRITE_REGS;
+        want[2]  = 0x02; want[3]  = 0x00;   /* read from */
+        want[4]  = 0x00; want[5]  = 0x03;   /* read quantity */
+        want[6]  = 0x01; want[7]  = 0x00;   /* write to */
+        want[8]  = 0x00; want[9]  = 0x02;   /* write quantity */
+        want[10] = 4u;                      /* byte count = write quantity * 2 */
+        memcpy(&want[11], regs, 4u);
+        nx_modbus_rtu_set_crc(want, sizeof(want));
+
+        assert(g_io.tx_len == sizeof(want));
+        assert(memcmp(g_io.tx, want, sizeof(want)) == 0);
+
+        /* The slave answers such a request like a read: the registers it read, behind a
+         * byte count, in the shape of a 03 response. */
+        uint8_t data[6] = { 0x00, 0x07, 0x00, 0x08, 0x00, 0x09 };
+        static uint8_t rsp[16];
+        size_t n = build_read_rsp(rsp, ADDR_METER, NX_MODBUS_FC_READ_WRITE_REGS, data, 6u);
+
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.rx = rsp; g_io.rx_len = n;
+        pump_master(&m17, 4);
+
+        nx_ref_msg_t *msg = pop_rsp(&q_meter);
+        assert(msg != NULL);
+        size_t         dlen = 0u;
+        const uint8_t *got  = nx_modbus_rtu_master_rsp_data(nx_ref_msg_data(msg),
+                                                            nx_ref_msg_len(msg), &dlen);
+        assert(got != NULL && dlen == 6u);
+        assert((uint16_t)(((uint16_t)got[0] << 8) | got[1]) == 7u);
+        assert((uint16_t)(((uint16_t)got[4] << 8) | got[5]) == 9u);
+        nx_ref_msg_release(msg);
+
+        /* The protocol's own limits, refused before anything is allocated. */
+        size_t before = after_free_probe(&pool);
+        /* 0x17 tops out at 121 written registers, because the frame also holds the read
+         * half - so the 122 the other write builders take is out of range here. */
+        static uint8_t big[242];
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 1u, 0u, 122u, big, sizeof(big))
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        /* The read half keeps its own 125 limit. */
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 126u, 0u, 1u, regs, 2u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        /* A read addressed to the broadcast address. */
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue,
+                                                    NX_MODBUS_RTU_ADDR_BROADCAST,
+                                                    0u, 1u, 0u, 1u, regs, 2u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        /* Neither quantity may be zero, and the byte count must be two per register. */
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 0u, 0u, 1u, regs, 2u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 1u, 0u, 0u, regs, 2u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 1u, 0u, 2u, regs, 3u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_METER,
+                                                    0u, 1u, 0u, 2u, NULL, 4u)
+               == NX_MODBUS_RTU_MASTER_ERR_PARAM);
+
+        assert(nx_queue_is_empty(&request_queue));
+        assert(after_free_probe(&pool) == before);   /* nothing was allocated */
+
+        nx_modbus_rtu_master_deinit(&m17);
+        printf("  OK: read/write-regs frame built, answered, and its limits enforced\n");
+    }
+
     /* ---- 12. init rejects a configuration that cannot work ---- */
     {
         nx_modbus_rtu_master_t bad;
@@ -714,6 +804,7 @@ int nx_modbus_rtu_master_example_run(void)
 
         const nx_modbus_rtu_slave_sub_t s_subs[] = {
             { NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000u, 0x00FFu, &s_inbox },
+            { NX_MODBUS_FC_READ_WRITE_REGS,   0x0000u, 0x00FFu, &s_inbox },
         };
         static uint8_t s_rx_buf[256];
 
@@ -725,7 +816,7 @@ int nx_modbus_rtu_master_example_run(void)
             .rx_buf         = s_rx_buf,
             .rx_size        = sizeof(s_rx_buf),
             .subs           = s_subs,
-            .subs_count     = 1u,
+            .subs_count     = 2u,
             .response_queue = &s_respq,
             .read           = lb_slave_read,
             .write          = lb_slave_write,
@@ -759,12 +850,12 @@ int nx_modbus_rtu_master_example_run(void)
             while (nx_queue_pop(&s_inbox, &req) == NX_QUEUE_OK) {
                 const nx_modbus_rtu_req_fix_t *q =
                     (const nx_modbus_rtu_req_fix_t *)nx_ref_msg_data(req);
-                uint16_t start = (uint16_t)(((uint16_t)q->addr_h << 8) | q->addr_l);
-                uint16_t qty   = (uint16_t)(((uint16_t)q->qty_h  << 8) | q->qty_l);
 
                 /* The slave saw exactly what the master asked for. */
-                assert(start == 0x0010u && qty == 3u);
                 assert(q->cmd == NX_MODBUS_FC_READ_HOLDING_REGS);
+                uint16_t start = (uint16_t)(((uint16_t)q->addr_h << 8) | q->addr_l);
+                uint16_t qty   = (uint16_t)(((uint16_t)q->qty_h  << 8) | q->qty_l);
+                assert(start == 0x0010u && qty == 3u);
 
                 /* Answer with each register echoing its own address. */
                 uint8_t data[6];
@@ -792,6 +883,58 @@ int nx_modbus_rtu_master_example_run(void)
         assert((uint16_t)(((uint16_t)data[0] << 8) | data[1]) == 0x0010u);
         assert((uint16_t)(((uint16_t)data[2] << 8) | data[3]) == 0x0011u);
         assert((uint16_t)(((uint16_t)data[4] << 8) | data[5]) == 0x0012u);
+        nx_ref_msg_release(rsp);
+
+        /* ---- and again with 0x17, whose request is the one variable-length frame a
+         * read builder produces and whose answer the master parses as a read. ---- */
+        const uint8_t wr[4] = { 0x00, 0x2Au, 0x01, 0x00 };
+        assert(nx_modbus_rtu_master_read_write_regs(&pool, &request_queue, ADDR_PUMP,
+                                                    0x0020u, 2u, 0x0040u, 2u, wr, sizeof(wr))
+               == NX_MODBUS_RTU_MASTER_OK);
+
+        for (unsigned i = 0; i < 12u; i++) {
+            nx_modbus_rtu_master_process(&ml);
+            nx_modbus_rtu_slave_process(&sl);
+
+            nx_ref_msg_t *req = NULL;
+            while (nx_queue_pop(&s_inbox, &req) == NX_QUEUE_OK) {
+                const nx_modbus_rtu_req_rw_t *rw =
+                    (const nx_modbus_rtu_req_rw_t *)nx_ref_msg_data(req);
+
+                /* Both halves crossed the bus intact, in their own field order. */
+                assert(rw->cmd == NX_MODBUS_FC_READ_WRITE_REGS);
+                assert((uint16_t)(((uint16_t)rw->wr_addr_h << 8) | rw->wr_addr_l) == 0x0040u);
+                assert((uint16_t)(((uint16_t)rw->wr_qty_h  << 8) | rw->wr_qty_l)  == 2u);
+                assert(rw->byte_count == 4u);
+                assert(memcmp(rw->payload, wr, 4u) == 0);
+
+                /* Answer the read half the way a register file would. */
+                uint16_t rd_start = (uint16_t)(((uint16_t)rw->rd_addr_h << 8) | rw->rd_addr_l);
+                uint16_t rd_qty   = (uint16_t)(((uint16_t)rw->rd_qty_h  << 8) | rw->rd_qty_l);
+                assert(rd_start == 0x0020u && rd_qty == 2u);
+
+                uint8_t rd[4];
+                for (uint16_t k = 0; k < rd_qty; k++) {
+                    uint16_t val = (uint16_t)(rd_start + k);
+                    rd[k * 2]     = (uint8_t)(val >> 8);
+                    rd[k * 2 + 1] = (uint8_t)(val & 0xFFu);
+                }
+                assert(nx_modbus_rtu_slave_reply_read(&pool, &s_respq,
+                                                      (const nx_modbus_rtu_header_t *)rw,
+                                                      rd, (size_t)rd_qty * 2u)
+                       == NX_MODBUS_RTU_SLAVE_OK);
+                nx_ref_msg_release(req);
+            }
+            g_io.clock_us += 500u;
+        }
+
+        rsp = pop_rsp(&q_pump);
+        assert(rsp != NULL);
+        dlen = 0u;
+        data = nx_modbus_rtu_master_rsp_data(nx_ref_msg_data(rsp), nx_ref_msg_len(rsp), &dlen);
+        assert(data != NULL && dlen == 4u);
+        assert((uint16_t)(((uint16_t)data[0] << 8) | data[1]) == 0x0020u);
+        assert((uint16_t)(((uint16_t)data[2] << 8) | data[3]) == 0x0021u);
         nx_ref_msg_release(rsp);
 
         nx_modbus_rtu_master_deinit(&ml);

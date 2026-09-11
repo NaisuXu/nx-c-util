@@ -135,7 +135,7 @@ and it is driven from the main loop by a single `process()` call.
   is *operationally* acceptable for a given register stays with the business module,
   which may push its own exception response.
 - **Length-based framing** — every supported frame's length follows from its
-  function code (8 bytes for `01..06`, `9 + byte_count` for `0F/10`), so RX needs no
+  function code (8 bytes for `01..06`, `9 + byte_count` for `0F/10` and `17`), so RX needs no
   inter-character (T3.5) timer — robust on a busy bus where arrival timing cannot be
   trusted. Resync after a bad address or CRC drops one byte and retries. On TX a
   3.5-character gap (derived from `baud_rate`) follows each frame.

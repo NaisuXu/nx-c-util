@@ -18,11 +18,11 @@
  * requests as data on its own queue.
  *
  * Framing model: frames are sliced by length. The length of every supported frame
- * is known from its function code (fixed 8 bytes for 01..06, or 9 + byte_count for
- * 0F/10), so RX needs no inter-character timer - which matters on a busy bus where
- * arrival timing cannot be trusted. Resynchronization after a bad address or CRC is
- * done by dropping one byte and retrying. On TX, a 3.5-character silence (derived
- * from @c baud_rate) is inserted as a gap after each transmitted frame.
+ * is known from its function code (a fixed 8 bytes for 01..06, or a byte_count the
+ * frame carries for 0F/10/17), so RX needs no inter-character timer - which matters
+ * on a busy bus where arrival timing cannot be trusted. Resynchronization after a bad
+ * address or CRC is done by dropping one byte and retrying. On TX, a 3.5-character
+ * silence (derived from @c baud_rate) is inserted as a gap after each transmitted frame.
  *
  * I/O is injected (this module touches no hardware): a non-blocking @c read pulls
  * received bytes, a non-blocking @c write starts a transmission, @c is_busy reports
@@ -79,7 +79,11 @@ typedef enum {
  *
  * The span a request touches:
  *   - 01/02/03/04, 0F/10: [start_addr, start_addr + quantity - 1];
- *   - 05/06 (single write): just the single data address.
+ *   - 05/06 (single write): just the single data address;
+ *   - 17 (read/write): the written range, [wr_addr, wr_addr + wr_qty - 1]. The read
+ *     range is not consulted, so a subscription owning a 0x17 exchange must cover
+ *     the written range; a module that reads from elsewhere than it writes declares
+ *     the two ranges in two entries, both with @c func 0x17.
  * A span whose end runs past 0xFFFF lies outside every possible range and is refused
  * with 0x02; it is never wrapped around into a low address.
  * The slave settles structural legality before dispatch - function support (0x01),
@@ -228,9 +232,9 @@ void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s);
 /**
  * @brief  Build a read data response and queue it for sending.
  *
- * For subscriber use: answers 01/02/03/04 with the data the module gathered. The
- * reply's address and function code are taken from @p request; @p data is copied in
- * behind a byte count.
+ * For subscriber use: answers 01/02/03/04 with the data the module gathered, and 17
+ * with the registers it read. The reply's address and function code are taken from
+ * @p request; @p data is copied in behind a byte count.
  *
  * @param  pool           Pool the response is allocated from, must not be NULL.
  * @param  response_queue Queue the slave transmits from, must not be NULL.

@@ -373,6 +373,37 @@ nx_modbus_rtu_master_ret_t nx_modbus_rtu_master_write_multiple_regs(nx_tiered_me
                                                                     const uint8_t        *regs,
                                                                     size_t                regs_len);
 
+/**
+ * @brief  Build a "read/write multiple registers" request (0x17) and queue it for sending.
+ *
+ * One exchange that writes @p wr_qty registers and reads @p rd_qty registers. The two
+ * ranges are independent: they may overlap, be disjoint, or be equal. The response
+ * carries the read registers in the shape of a read response, so it is read back with
+ * nx_modbus_rtu_master_rsp_data.
+ *
+ * @param  pool          Pool the request is allocated from, must not be NULL.
+ * @param  request_queue Queue the master transmits from, must not be NULL.
+ * @param  slave_addr    Target slave, 1..247 (broadcast is not valid for a read).
+ * @param  rd_addr       Address of the first register to read.
+ * @param  rd_qty        Number of registers to read, 1..125.
+ * @param  wr_addr       Address of the first register to write.
+ * @param  wr_qty        Number of registers to write, 1..121.
+ * @param  regs          Register values in wire order (big-endian pairs), must not be NULL.
+ * @param  regs_len      Length of @p regs in bytes; must equal @p wr_qty * 2.
+ *
+ * @return NX_MODBUS_RTU_MASTER_OK if the request was queued; otherwise the reason it
+ *         was not (invalid argument, pool exhausted, queue full).
+ */
+nx_modbus_rtu_master_ret_t nx_modbus_rtu_master_read_write_regs(nx_tiered_mem_pool_t *pool,
+                                                                nx_queue_t           *request_queue,
+                                                                uint8_t               slave_addr,
+                                                                uint16_t              rd_addr,
+                                                                uint16_t              rd_qty,
+                                                                uint16_t              wr_addr,
+                                                                uint16_t              wr_qty,
+                                                                const uint8_t        *regs,
+                                                                size_t                regs_len);
+
 /* ------------------------------------------------------------------ */
 /* Response inspection                                                */
 /* ------------------------------------------------------------------ */
@@ -397,11 +428,12 @@ nx_modbus_rtu_master_ret_t nx_modbus_rtu_master_write_multiple_regs(nx_tiered_me
 bool nx_modbus_rtu_master_rsp_is_exception(const uint8_t *frame, size_t flen, uint8_t *exc);
 
 /**
- * @brief  Locate the data carried by a read response (0x01/0x02/0x03/0x04).
+ * @brief  Locate the data carried by a read response (0x01/0x02/0x03/0x04 and 0x17).
  *
  * The read responses carry their payload behind a byte count. This returns a pointer
  * into @p frame - no copy is made, and the data is valid for as long as the message the
  * subscriber holds. Register values are two-byte fields, most-significant byte first.
+ * The registers a 0x17 exchange read are found here, in the same shape.
  *
  * @param  frame Response frame, must not be NULL.
  * @param  flen  Frame length in bytes, as reported by nx_ref_msg_len().

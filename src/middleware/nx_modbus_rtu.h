@@ -62,7 +62,8 @@ typedef enum {
     NX_MODBUS_FC_WRITE_SINGLE_COIL     = 0x05u, /**< Write single coil */
     NX_MODBUS_FC_WRITE_SINGLE_REG      = 0x06u, /**< Write single register */
     NX_MODBUS_FC_WRITE_MULTIPLE_COILS  = 0x0Fu, /**< Write multiple coils */
-    NX_MODBUS_FC_WRITE_MULTIPLE_REGS   = 0x10u  /**< Write multiple registers */
+    NX_MODBUS_FC_WRITE_MULTIPLE_REGS   = 0x10u, /**< Write multiple registers */
+    NX_MODBUS_FC_READ_WRITE_REGS       = 0x17u  /**< Read/write multiple registers */
 } nx_modbus_fc_t;
 
 /**
@@ -134,6 +135,32 @@ typedef struct {
 } nx_modbus_rtu_req_var_t;
 
 /**
+ * @brief Read/write multiple registers request, for function code 0x17.
+ *
+ * One request that writes @c wr_qty registers from @c wr_addr and reads @c rd_qty
+ * registers from @c rd_addr; the two ranges are independent and may overlap.
+ *
+ * @note  @c payload is a flexible array member laid out as: @c byte_count write
+ *        data bytes (two per written register, high byte first), then @c crc_l and
+ *        @c crc_h. The CRC is therefore not a named struct field here; read it at
+ *        @c payload[byte_count] / @c [byte_count+1].
+ */
+typedef struct {
+    uint8_t addr;        /**< Slave address */
+    uint8_t cmd;         /**< Function code */
+    uint8_t rd_addr_h;   /**< Address of the first register to read, high byte */
+    uint8_t rd_addr_l;   /**< Address of the first register to read, low byte */
+    uint8_t rd_qty_h;    /**< Number of registers to read, high byte */
+    uint8_t rd_qty_l;    /**< Number of registers to read, low byte */
+    uint8_t wr_addr_h;   /**< Address of the first register to write, high byte */
+    uint8_t wr_addr_l;   /**< Address of the first register to write, low byte */
+    uint8_t wr_qty_h;    /**< Number of registers to write, high byte */
+    uint8_t wr_qty_l;    /**< Number of registers to write, low byte */
+    uint8_t byte_count;  /**< Number of write data bytes that follow */
+    uint8_t payload[];   /**< Write values (byte_count bytes) + crc_l + crc_h */
+} nx_modbus_rtu_req_rw_t;
+
+/**
  * @brief Fixed-length response, for function codes 05/06/0F/10.
  *
  * 05/06 echo the data address + written value; 0F/10 echo the starting address
@@ -151,9 +178,10 @@ typedef struct {
 } nx_modbus_rtu_rsp_fix_t;
 
 /**
- * @brief Variable-length response, for function codes 01/02/03/04.
+ * @brief Variable-length response, for function codes 01/02/03/04 and 17.
  *
- * @c byte_count is the number of data bytes; the CRC trails the payload.
+ * @c byte_count is the number of data bytes; the CRC trails the payload. A 0x17
+ * response carries the registers it read, in the same shape as a read response.
  *
  * @note  @c payload is a flexible array member laid out as: @c byte_count read
  *        data bytes, then @c crc_l and @c crc_h.
@@ -190,6 +218,20 @@ typedef struct {
  * @return Pointer to crc_l (crc_h follows at +1), or NULL if @p frame is NULL.
  */
 static inline uint8_t *nx_modbus_rtu_req_var_crc(nx_modbus_rtu_req_var_t *frame)
+{
+    return (frame != NULL) ? &frame->payload[frame->byte_count] : NULL;
+}
+
+/**
+ * @brief  Locate the CRC low byte within a 0x17 request's payload.
+ *
+ * As above but for nx_modbus_rtu_req_rw_t: the CRC follows the @c byte_count write
+ * data bytes, at @c payload[byte_count] / @c [byte_count + 1].
+ *
+ * @param  frame Request frame, must not be NULL.
+ * @return Pointer to crc_l (crc_h follows at +1), or NULL if @p frame is NULL.
+ */
+static inline uint8_t *nx_modbus_rtu_req_rw_crc(nx_modbus_rtu_req_rw_t *frame)
 {
     return (frame != NULL) ? &frame->payload[frame->byte_count] : NULL;
 }

@@ -147,6 +147,32 @@ static size_t build_fixed_req(uint8_t *buf, uint8_t addr, uint8_t cmd,
     return 8u;
 }
 
+/* Build a read/write multiple registers request (0x17) from an independently typed
+ * layout: two address/quantity pairs, then a byte count at offset 10, then the write
+ * data. `bc` is passed separately from `wr_qty` so a test can send the two out of step. */
+static size_t build_rw_req(uint8_t *buf, uint8_t addr, uint16_t rd_addr, uint16_t rd_qty,
+                           uint16_t wr_addr, uint16_t wr_qty,
+                           const uint8_t *wr_data, uint8_t bc)
+{
+    buf[0]  = addr;
+    buf[1]  = NX_MODBUS_FC_READ_WRITE_REGS;
+    buf[2]  = (uint8_t)(rd_addr >> 8);
+    buf[3]  = (uint8_t)(rd_addr & 0xFFu);
+    buf[4]  = (uint8_t)(rd_qty >> 8);
+    buf[5]  = (uint8_t)(rd_qty & 0xFFu);
+    buf[6]  = (uint8_t)(wr_addr >> 8);
+    buf[7]  = (uint8_t)(wr_addr & 0xFFu);
+    buf[8]  = (uint8_t)(wr_qty >> 8);
+    buf[9]  = (uint8_t)(wr_qty & 0xFFu);
+    buf[10] = bc;
+    memcpy(&buf[11], wr_data, bc);
+    nx_modbus_rtu_set_crc(buf, 11u + (size_t)bc + 2u);   /* fills the last two bytes */
+    return 11u + (size_t)bc + 2u;
+}
+
+/* The register values the 0x17 tests write, in wire order (big-endian pairs). */
+static const uint8_t rw_vals[4] = { 0x00, 0x2Au, 0x01, 0x00u };
+
 /* ------------------------------------------------------------------ */
 /* A "business module": drain its inbox and answer each request       */
 /* ------------------------------------------------------------------ */
@@ -170,7 +196,25 @@ static void business_serve(const char *name, nx_queue_t *inbox,
 
         nx_modbus_rtu_slave_ret_t ret;
 
-        if (cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
+        if (cmd == NX_MODBUS_FC_READ_WRITE_REGS) {
+            /* Two ranges: the first two fields are the read half, so the read response
+             * follows those rather than the head of the frame. The write half needs no
+             * reply of its own - a 0x17 response carries only what was read. */
+            const nx_modbus_rtu_req_rw_t *rw =
+                (const nx_modbus_rtu_req_rw_t *)nx_ref_msg_data(req);
+            uint16_t rd_start = (uint16_t)((rw->rd_addr_h << 8) | rw->rd_addr_l);
+            uint16_t rd_qty   = (uint16_t)((rw->rd_qty_h  << 8) | rw->rd_qty_l);
+            uint8_t  data[32];
+            assert(rd_qty * 2u <= sizeof(data));
+            for (uint16_t i = 0; i < rd_qty; i++) {
+                uint16_t val = (uint16_t)(rd_start + i);
+                data[i * 2]     = (uint8_t)(val >> 8);
+                data[i * 2 + 1] = (uint8_t)(val & 0xFFu);
+            }
+            ret = nx_modbus_rtu_slave_reply_read(pool, response_queue,
+                                                 (const nx_modbus_rtu_header_t *)q,
+                                                 data, (size_t)rd_qty * 2u);
+        } else if (cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
             /* Semantic range check: a valve position is a percentage. The frame is
              * well-formed either way - only this module knows 4000 is meaningless. */
             if (qty > 100u) {
@@ -532,6 +576,96 @@ int nx_modbus_rtu_slave_example_run(void)
 
         nx_modbus_rtu_slave_deinit(&s5);
         printf("  OK: a refused write released the bus and returned the frame's block\n");
+    }
+
+    /* ---- read/write multiple registers (0x17): two ranges in one frame ----
+     * The frame carries a quantity per half and a byte count at offset 10, so it is the
+     * one request whose length is not simply addr+cmd+qty. Three things are checked:
+     * a well-formed exchange is dispatched and answered with the registers it read; the
+     * containment test judges the written range (the half that changes state), not the
+     * read range; and a byte count that disagrees with the write quantity is refused
+     * structurally rather than reaching a module. */
+    {
+        /* A module that owns registers 0x0000..0x000F, written and read. */
+        const nx_modbus_rtu_slave_sub_t rw_subs[] = {
+            { NX_MODBUS_FC_READ_WRITE_REGS, 0x0000, 0x000F, &q_valve },
+        };
+        nx_modbus_rtu_slave_t     s6;
+        nx_modbus_rtu_slave_cfg_t c6 = cfg;
+        c6.subs       = rw_subs;
+        c6.subs_count = 1;
+
+        static uint8_t script[3u * 32u];
+        size_t         n = 0;
+
+        /* (1) write 2 registers at 0x0004, read 3 from 0x0000 - inside the owned range. */
+        n += build_rw_req(script + n, SLAVE_ADDR, 0x0000u, 3u, 0x0004u, 2u,
+                          rw_vals, 4u);
+        /* (2) the same write, but read from 0x0100 - outside the owned range. */
+        n += build_rw_req(script + n, SLAVE_ADDR, 0x0100u, 2u, 0x0004u, 2u,
+                          rw_vals, 4u);
+        /* (3) byte_count says 3 bytes where the write quantity asks for 4. */
+        n += build_rw_req(script + n, SLAVE_ADDR, 0x0000u, 1u, 0x0004u, 2u,
+                          rw_vals, 3u);
+
+        /* The scenes above leave frames in the shared response queue; start this one from
+         * an empty queue so every byte on the wire belongs to a request below. */
+        nx_ref_msg_t *stale = NULL;
+        while (nx_queue_pop(&response_queue, &stale) == NX_QUEUE_OK) {
+            nx_ref_msg_release(stale);
+        }
+
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.rx     = script;
+        g_io.rx_len = n;
+        assert(nx_modbus_rtu_slave_init(&s6, &c6));
+
+        /* The requests the module has to answer land in the queue the module reads; they
+         * are answered on later iterations, after the state machine has served them. */
+        for (int k = 0; k < 20; k++) {
+            g_io.clock_us += 1000;
+            nx_modbus_rtu_slave_process(&s6);
+            business_serve("rw", &q_valve, &response_queue, &pool);
+        }
+
+        /* Request (3) was refused by the framing and value rules alone, so the slave put
+         * its exception on the wire without a module being involved - which happens on the
+         * same iteration the frame arrives, before the two requests that need serving.
+         * The wire is therefore the exception first, then the answers in request order. */
+        const uint8_t *f   = g_io.tx;
+        size_t         off = 0;
+
+        assert(f[off + 1] == (NX_MODBUS_FC_READ_WRITE_REGS | NX_MODBUS_RTU_EXCEPTION_FLAG));
+        assert(f[off + 2] == NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
+        assert(nx_modbus_rtu_check_crc(f + off, 5u));
+        off += 5u;
+        printf("  OK: a byte count disagreeing with the write quantity drew exception 0x%02X\n",
+               NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
+
+        /* Request (1): dispatched, and answered in the shape a read response has, with the
+         * registers the module read. The module echoes each register's own address, so the
+         * read range is visible: 0x0000, 0x0001, 0x0002. */
+        assert(f[off + 1] == NX_MODBUS_FC_READ_WRITE_REGS);
+        assert(f[off + 2] == 6u);                 /* byte_count: 3 registers read back */
+        assert(nx_modbus_rtu_check_crc(f + off, 3u + 6u + 2u));
+        assert(((f[off + 3] << 8) | f[off + 4]) == 0x0000u);
+        assert(((f[off + 7] << 8) | f[off + 8]) == 0x0002u);
+        off += 3u + 6u + 2u;
+        printf("  OK: 0x17 request dispatched and answered like a read response\n");
+
+        /* Request (2): the read half reached past the owned range but the written half did
+         * not, so the request was dispatched - containment is judged on the write range,
+         * the half that changes state. Proof that it was dispatched and not refused: the
+         * response is a data response, not an exception. */
+        assert(f[off + 1] == NX_MODBUS_FC_READ_WRITE_REGS);
+        assert(f[off + 2] == 4u);                 /* byte_count: 2 registers read back */
+        off += 3u + 4u + 2u;
+        printf("  OK: a read half outside the owned range did not change containment\n");
+
+        assert(off == g_io.tx_len);                /* nothing extra, nothing missing */
+        printf("  OK: the three frames above are the whole wire trace\n");
+
+        nx_modbus_rtu_slave_deinit(&s6);
     }
 
     return 0;
