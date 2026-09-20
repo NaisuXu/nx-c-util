@@ -188,9 +188,7 @@ typedef struct {
  */
 typedef struct {
     nx_kth7112_cfg_t cfg;       /**< Configuration (copied at init)          */
-    struct {
-        bool unlocked;          /**< Register writes permitted right now     */
-    } run;                      /**< Runtime state                           */
+    bool unlocked;              /**< Register writes permitted right now      */
 } nx_kth7112_t;
 
 /* ------------------------------------------------------------------ */
@@ -200,7 +198,7 @@ typedef struct {
 /**
  * @brief  Initialize a driver instance.
  *
- * The part powers up with registers locked, so @c run.unlocked starts false and
+ * The part powers up with registers locked, so @c unlocked starts false and
  * every register write returns NX_KTH7112_ERR_LOCKED until nx_kth7112_unlock
  * succeeds.
  *

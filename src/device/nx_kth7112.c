@@ -177,7 +177,7 @@ bool nx_kth7112_init(nx_kth7112_t *dev, const nx_kth7112_cfg_t *cfg)
     }
 
     dev->cfg = *cfg;
-    dev->run.unlocked = false;
+    dev->unlocked = false;
 
     return true;
 }
@@ -241,7 +241,7 @@ nx_kth7112_ret_t nx_kth7112_write_reg8(nx_kth7112_t *dev, uint8_t addr, uint8_t 
     if (dev == NULL) {
         return NX_KTH7112_ERR_PARAM;
     }
-    if (!dev->run.unlocked) {
+    if (!dev->unlocked) {
         return NX_KTH7112_ERR_LOCKED;
     }
 
@@ -307,7 +307,7 @@ nx_kth7112_ret_t nx_kth7112_unlock(nx_kth7112_t *dev)
         return ret;
     }
 
-    dev->run.unlocked = true;
+    dev->unlocked = true;
     return NX_KTH7112_OK;
 }
 
@@ -322,7 +322,7 @@ nx_kth7112_ret_t nx_kth7112_lock(nx_kth7112_t *dev)
         return ret;
     }
 
-    dev->run.unlocked = false;
+    dev->unlocked = false;
     return NX_KTH7112_OK;
 }
 
@@ -335,7 +335,7 @@ nx_kth7112_ret_t nx_kth7112_write_mtp(nx_kth7112_t *dev)
     if (dev == NULL) {
         return NX_KTH7112_ERR_PARAM;
     }
-    if (!dev->run.unlocked) {
+    if (!dev->unlocked) {
         return NX_KTH7112_ERR_LOCKED;
     }
 
