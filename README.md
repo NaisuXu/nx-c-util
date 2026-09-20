@@ -25,7 +25,7 @@ nx-c-util/
 │   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log)
 │   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, modbus_rtu_master, can_bus, tp_sdu, can_isotp)
 │   ├── algo/         # Algorithms (crc, sha256)
-│   └── device/       # Platform-independent device drivers (ws2812)
+│   └── device/       # Platform-independent device drivers (ws2812, kth7112)
 └── examples/
     ├── core/         # Core module usage examples
     ├── middleware/   # Middleware module usage examples
@@ -79,6 +79,7 @@ See [Algorithm Modules Documentation](docs/algo_en.md) for detailed descriptions
 
 ### Device Modules
 - [nx_ws2812](docs/device_en.md#nx_ws2812--ws2812b-rgb-led-strip-driver) — WS2812/WS2812B RGB LED strip driver
+- [nx_kth7112](docs/device_en.md#nx_kth7112--kth7112-magnetic-angle-encoder-over-spi) — KTH7112 16-bit magnetic angle encoder over SPI
 
 See [Device Modules Documentation](docs/device_en.md) for detailed descriptions and examples.
 
@@ -112,7 +113,7 @@ Then run the produced executables:
   ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer, coro)
   ./build/nx_middleware_examples  # Middleware modules (modbus_rtu_slave, modbus_rtu_master, can_isotp)
   ./build/nx_algo_examples        # Algorithm modules (crc, sha256)
-  ./build/nx_device_examples      # Device drivers (ws2812)
+  ./build/nx_device_examples      # Device drivers (ws2812, kth7112)
   ```
 
 - **Windows (MinGW / MSYS)**

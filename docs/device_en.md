@@ -83,3 +83,80 @@ if (!nx_ws2812_update(&strip)) {
 > / `bit1_pattern` and `reset_bytes` for your actual clock: the high-time window is
 > only ±150ns wide, and the reset gap must hold the line low long enough to latch
 > (>50us for WS2812, >280us on some WS2812B revisions).
+
+## nx_kth7112 — KTH7112 magnetic angle encoder over SPI
+
+A driver for the KTH7112 16-bit magnetic angle encoder, covering its three-wire SPI
+protocol (Mode 3): command bytes, frame shapes, the CRC-8 the part appends to every
+read, and the register-lock state machine. The caller owns the SPI port and supplies
+chip-select, write, read and delay callbacks. No dynamic memory, no floating point.
+
+- **Frame-level API** — `nx_kth7112_read_angle` returns the raw 16-bit code, and
+  `nx_kth7112_read_reg8` / `_write_reg8` / `_read_reg16` / `_write_reg16` reach the
+  register bank. One call is one chip-select frame, executed synchronously: a frame
+  is a handful of bytes, far shorter than a control cycle, so there is nothing to
+  spread across iterations. `nx_kth7112_raw_to_mdeg` converts a code to
+  millidegrees for callers that want degrees without floating point.
+- **CRC-8/ITU on every read, verified before the value is released** — the part
+  appends polynomial `0x07` / init `0x00` / xorout `0x55`, computed here from the
+  module's own 256-entry table. A mismatch returns `NX_KTH7112_ERR_CRC` and leaves
+  the caller's output variable untouched, so a failed read can never be mistaken for
+  a good one.
+- **Register writes are acknowledged** — a write answers with the value the part
+  accepted, in the same frame, and the driver compares that echo against what it
+  sent. A mismatch is `NX_KTH7112_ERR_IO`: the write went unacknowledged rather than
+  merely unauthorised.
+- **The lock state is tracked, and a locked write never reaches the bus** — the part
+  is locked at power-up and discards register writes silently. The driver tracks the
+  state itself and returns `NX_KTH7112_ERR_LOCKED` from a write issued while locked
+  without putting a frame on the wire. Unlocking may be repeated, so calling
+  `nx_kth7112_unlock` again is how the state is re-established.
+- **Low byte at the low address** — the multi-byte fields are stored low byte first,
+  so `NX_KTH7112_REG_ZERO_L` addresses `ZERO[7:0]` and `NX_KTH7112_REG_ZERO_H` the
+  high byte. `_read_reg16` / `_write_reg16` take the low byte's address and move both
+  bytes, each with its own CRC and echo check.
+- **Optional callbacks stay optional** — `is_busy` and `delay_ns` may each be NULL.
+  A NULL `is_busy` means the port is assumed ready, which suits blocking transfers;
+  a NULL `delay_ns` skips the inter-frame wait, which is correct only when the port
+  already guarantees it.
+- **Not thread-safe** — the lock state lives in the handle, so serialize access from
+  multiple contexts yourself.
+
+```c
+#include "nx_kth7112.h"
+
+static const nx_kth7112_cfg_t cfg = {
+    .cs         = spi_cs,        /* required: asserts and releases chip select */
+    .write      = spi_write,     /* required: shifts bytes out                 */
+    .read       = spi_read,      /* required: shifts bytes in                  */
+    .is_busy    = spi_busy,      /* optional: NULL if the port is always ready */
+    .delay_ns   = delay_ns,      /* optional: NULL if the port already paces   */
+    .io_ctx     = &spi,
+};
+
+nx_kth7112_t enc;
+nx_kth7112_init(&enc, &cfg);
+
+uint16_t raw;
+if (nx_kth7112_read_angle(&enc, &raw) == NX_KTH7112_OK) {
+    /* raw == angle * 65536 / 360 */
+}
+
+/* The part powers up locked, so unlock once before any register write. */
+nx_kth7112_unlock(&enc);
+nx_kth7112_write_reg8(&enc, NX_KTH7112_REG_FW, 0x44u);   /* verify echo */
+nx_kth7112_write_mtp(&enc);                              /* make it survive power-down */
+nx_kth7112_lock(&enc);                                   /* refuse further writes */
+```
+
+> **Note:** `nx_kth7112_write_mtp` burns the register bank into non-volatile memory
+> and is irreversible. The part needs more than `NX_KTH7112_MTP_MIN_INTERVAL_MS`
+> (400 ms) between burns, which the driver cannot measure since it holds no time
+> source — space the calls yourself and never let power drop mid-burn. Two further
+> timing requirements belong to the port rather than the driver: the SCK high time of
+> the 24th clock of a register write must exceed 100 ns, and two frames must be more
+> than 150 ns apart. These are comfortable at a few MHz and marginal at the part's
+> 10 Mbps ceiling, where the clock period is the 100 ns minimum itself, so check
+> what your port actually runs — and that it does not stretch its final clock — then
+> use `delay_ns` if either interval needs help.
+
