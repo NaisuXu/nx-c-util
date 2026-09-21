@@ -157,10 +157,14 @@ and it is driven from the main loop by a single `process()` call.
   in it belong to whoever pushed them.
 - **Reply helpers for business modules** — three builders cover every answer a module can
   give: `nx_modbus_rtu_slave_reply_read()` wraps the data it gathered behind a byte count,
-  `nx_modbus_rtu_slave_reply_write()` builds the write confirmation that echoes the request,
-  and `nx_modbus_rtu_slave_reply_exception()` reports a code. Each takes only the pool and
-  the response queue, so a business module needs no slave handle; the reply's address and
-  function code are taken from the request frame. All three return an
+  `nx_modbus_rtu_slave_reply_write()` builds a write confirmation from the supplied request
+  fields, and `nx_modbus_rtu_slave_reply_exception()` reports a code. All three take the
+  pool, response queue, slave address, and function code directly; the write helper also
+  takes a 16-bit starting/data address and `data` in host byte order. `data` is the write
+  value for 05/06 and the quantity for 0F/10; the helper encodes both 16-bit arguments in
+  RTU high-byte-first wire order. A business module passes these relevant fields from the
+  dispatched request, so it needs neither a slave handle nor a pointer to the complete
+  request frame. All three return an
   `nx_modbus_rtu_slave_ret_t` that names why a reply was not queued — `ERR_NOMEM` and
   `ERR_FULL` are the resource shortages worth logging, `ERR_BROADCAST` is the normal
   outcome for a broadcast request, `ERR_PARAM` a caller bug.

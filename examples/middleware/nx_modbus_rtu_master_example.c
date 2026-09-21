@@ -865,7 +865,7 @@ int nx_modbus_rtu_master_example_run(void)
                     data[k * 2 + 1] = (uint8_t)(val & 0xFFu);
                 }
                 assert(nx_modbus_rtu_slave_reply_read(&pool, &s_respq,
-                                                      (const nx_modbus_rtu_header_t *)q,
+                                                      q->addr, q->cmd,
                                                       data, (size_t)qty * 2u)
                        == NX_MODBUS_RTU_SLAVE_OK);
                 nx_ref_msg_release(req);
@@ -920,7 +920,7 @@ int nx_modbus_rtu_master_example_run(void)
                     rd[k * 2 + 1] = (uint8_t)(val & 0xFFu);
                 }
                 assert(nx_modbus_rtu_slave_reply_read(&pool, &s_respq,
-                                                      (const nx_modbus_rtu_header_t *)rw,
+                                                      rw->addr, rw->cmd,
                                                       rd, (size_t)rd_qty * 2u)
                        == NX_MODBUS_RTU_SLAVE_OK);
                 nx_ref_msg_release(req);

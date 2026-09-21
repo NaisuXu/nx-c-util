@@ -78,7 +78,7 @@ if (nx_modbus_rtu_check_crc(buf, sizeof(buf))) {
 - **基于长度的成帧** —— 每个受支持帧的长度都由功能码决定（`01..06` 为 8 字节，`0F/10/17` 为 `9 + byte_count`），因此接收侧无需字符间（T3.5）定时器，在到达时序不可信的繁忙总线上更稳健。地址或 CRC 出错后，丢弃一个字节重新同步。发送侧在每帧之后插入一段 3.5 字符的间隔（由 `baud_rate` 推导）。
 - **注入式非阻塞 I/O** —— `read` / `write` 搬运字节，`is_busy` 报告接口是否仍在发送（使共享、非独占的总线只在空闲时才被驱动），可选的 `dir_tx` 翻转 RS-485 方向（DE）引脚，`get_us` 为发送间隔计时。`is_busy` 为 NULL 时把 `write` 视作阻塞完成；`get_us` 为 NULL 时跳过间隔。串口回调（`read` / `write` / `is_busy`）共用 `io_ctx`，当驱动是模块自有的单一实例时可保持 NULL；`dir_tx` 用独立的 `dir_ctx`（DE 引脚常是另一个 GPIO），`get_us` 作为系统级时间源不带任何 ctx。`write` 返回 false 意味着字节根本没被接收，也就没有什么需要等待：该帧被丢弃，方向引脚在同一轮内落回，把总线段留给其它节点。
 - **释放实例** —— `nx_modbus_rtu_slave_deinit()` 交还半途中断的发送帧所占的池块，拉低方向引脚，并把状态机停回空闲。对已经在跑的实例重新 init 之前、以及让实例退出服务时都应调用它；响应队列不予处理，里面的消息归推送者所有。
-- **面向业务模块的应答辅助函数** —— 三个构造函数覆盖业务模块能给出的全部答复：`nx_modbus_rtu_slave_reply_read()` 把收集到的数据包上字节数，`nx_modbus_rtu_slave_reply_write()` 构造回显请求的写确认，`nx_modbus_rtu_slave_reply_exception()` 上报一个异常码。它们都只要池和响应队列，业务模块无需持有从站句柄；应答的地址与功能码取自请求帧。三者都返回 `nx_modbus_rtu_slave_ret_t`，指明应答未能入队的原因：`ERR_NOMEM` 与 `ERR_FULL` 是值得打日志的资源短缺，`ERR_BROADCAST` 是广播请求的正常结果，`ERR_PARAM` 则是调用方的 bug。
+- **面向业务模块的应答辅助函数** —— 三个构造函数覆盖业务模块能给出的全部答复：`nx_modbus_rtu_slave_reply_read()` 把收集到的数据包上字节数，`nx_modbus_rtu_slave_reply_write()` 根据传入的请求字段构造写确认，`nx_modbus_rtu_slave_reply_exception()` 上报一个异常码。三者都直接接收池、响应队列、请求中的从站地址与功能码；写确认还接收主机字节序的 16 位起始/数据地址和 `data`，其中 `data` 在 `05/06` 中表示写入值，在 `0F/10` 中表示数量，辅助函数负责把两个 16 位参数编码为 RTU 高字节在前的线序。业务模块只需从收到的请求中传入这些相关字段，无需持有从站句柄或传递完整请求帧的指针。三者都返回 `nx_modbus_rtu_slave_ret_t`，指明应答未能入队的原因：`ERR_NOMEM` 与 `ERR_FULL` 是值得打日志的资源短缺，`ERR_BROADCAST` 是广播请求的正常结果，`ERR_PARAM` 则是调用方的 bug。
 - **自身不做任何分配** —— 接收成帧缓冲、每条消息背后的分层内存池、共享的响应队列全部由调用方持有。内存耗尽时优雅降级：响应被丢弃，主站超时即可。
 
 ```c

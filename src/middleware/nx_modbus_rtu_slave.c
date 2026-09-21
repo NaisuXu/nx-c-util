@@ -162,8 +162,7 @@ static uint8_t request_value_exc(uint8_t cmd, const uint8_t *f)
  */
 static void send_exception(nx_modbus_rtu_slave_t *s, const uint8_t *frame, uint8_t exc)
 {
-    (void)nx_modbus_rtu_slave_reply_exception(s->cfg.pool, s->cfg.response_queue,
-                                              (const nx_modbus_rtu_header_t *)frame, exc);
+    (void)nx_modbus_rtu_slave_reply_exception(s->cfg.pool, s->cfg.response_queue, frame[0], frame[1], exc);
 }
 
 /**
@@ -465,19 +464,16 @@ void nx_modbus_rtu_slave_process(nx_modbus_rtu_slave_t *s)
 /**
  * @brief Whether a reply may be built at all: arguments present, and not a broadcast.
  *
- * Taking the address from the request means this check and the reply's address field
- * can never disagree.
- *
  * @return NX_MODBUS_RTU_SLAVE_OK when a reply may be built.
  */
-static nx_modbus_rtu_slave_ret_t reply_allowed(const nx_tiered_mem_pool_t   *pool,
-                                               const nx_queue_t             *response_queue,
-                                               const nx_modbus_rtu_header_t *request)
+static nx_modbus_rtu_slave_ret_t reply_allowed(const nx_tiered_mem_pool_t *pool,
+                                               const nx_queue_t           *response_queue,
+                                               uint8_t                     slave_addr)
 {
-    if (pool == NULL || response_queue == NULL || request == NULL) {
+    if (pool == NULL || response_queue == NULL) {
         return NX_MODBUS_RTU_SLAVE_ERR_PARAM;
     }
-    if (request->addr == NX_MODBUS_RTU_ADDR_BROADCAST) {
+    if (slave_addr == NX_MODBUS_RTU_ADDR_BROADCAST) {
         return NX_MODBUS_RTU_SLAVE_ERR_BROADCAST;
     }
     return NX_MODBUS_RTU_SLAVE_OK;
@@ -498,13 +494,14 @@ static nx_modbus_rtu_slave_ret_t reply_send(nx_ref_msg_t *msg, nx_queue_t *respo
     return queued ? NX_MODBUS_RTU_SLAVE_OK : NX_MODBUS_RTU_SLAVE_ERR_FULL;
 }
 
-nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_read(nx_tiered_mem_pool_t         *pool,
-                                                         nx_queue_t                   *response_queue,
-                                                         const nx_modbus_rtu_header_t *request,
-                                                         const uint8_t                *data,
-                                                         size_t                        len)
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_read(nx_tiered_mem_pool_t *pool,
+                                                         nx_queue_t           *response_queue,
+                                                         uint8_t               slave_addr,
+                                                         uint8_t               cmd,
+                                                         const uint8_t        *data,
+                                                         size_t                len)
 {
-    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, request);
+    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, slave_addr);
     if (ret != NX_MODBUS_RTU_SLAVE_OK) {
         return ret;
     }
@@ -521,20 +518,22 @@ nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_read(nx_tiered_mem_pool_t   
     }
 
     nx_modbus_rtu_rsp_var_t *r = (nx_modbus_rtu_rsp_var_t *)nx_ref_msg_data(msg);
-    r->addr       = request->addr;
-    r->cmd        = request->cmd;
+    r->addr       = slave_addr;
+    r->cmd        = cmd;
     r->byte_count = (uint8_t)len;
     memcpy(r->payload, data, len);
 
     return reply_send(msg, response_queue, rsp_len);
 }
 
-nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_write(nx_tiered_mem_pool_t          *pool,
-                                                          nx_queue_t                    *response_queue,
-                                                          const nx_modbus_rtu_req_fix_t *request)
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_write(nx_tiered_mem_pool_t *pool,
+                                                          nx_queue_t           *response_queue,
+                                                          uint8_t               slave_addr,
+                                                          uint8_t               cmd,
+                                                          uint16_t              addr,
+                                                          uint16_t              data)
 {
-    nx_modbus_rtu_slave_ret_t ret =
-        reply_allowed(pool, response_queue, (const nx_modbus_rtu_header_t *)request);
+    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, slave_addr);
     if (ret != NX_MODBUS_RTU_SLAVE_OK) {
         return ret;
     }
@@ -544,24 +543,25 @@ nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_write(nx_tiered_mem_pool_t  
         return NX_MODBUS_RTU_SLAVE_ERR_NOMEM;   /* master will time out */
     }
 
-    /* The response echoes the request's first six bytes; only the CRC is recomputed. */
+    /* The response echoes the request values; only the CRC is newly computed. */
     nx_modbus_rtu_rsp_fix_t *r = (nx_modbus_rtu_rsp_fix_t *)nx_ref_msg_data(msg);
-    r->addr   = request->addr;
-    r->cmd    = request->cmd;
-    r->addr_h = request->addr_h;
-    r->addr_l = request->addr_l;
-    r->data_h = request->qty_h;
-    r->data_l = request->qty_l;
+    r->addr   = slave_addr;
+    r->cmd    = cmd;
+    r->addr_h = (uint8_t)(addr >> 8);
+    r->addr_l = (uint8_t)(addr & 0xFFu);
+    r->data_h = (uint8_t)(data >> 8);
+    r->data_l = (uint8_t)(data & 0xFFu);
 
     return reply_send(msg, response_queue, sizeof(*r));
 }
 
-nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t         *pool,
-                                                              nx_queue_t                   *response_queue,
-                                                              const nx_modbus_rtu_header_t *request,
-                                                              uint8_t                       exception_code)
+nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool_t *pool,
+                                                              nx_queue_t           *response_queue,
+                                                              uint8_t               slave_addr,
+                                                              uint8_t               cmd,
+                                                              uint8_t               exception_code)
 {
-    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, request);
+    nx_modbus_rtu_slave_ret_t ret = reply_allowed(pool, response_queue, slave_addr);
     if (ret != NX_MODBUS_RTU_SLAVE_OK) {
         return ret;
     }
@@ -572,8 +572,8 @@ nx_modbus_rtu_slave_ret_t nx_modbus_rtu_slave_reply_exception(nx_tiered_mem_pool
     }
 
     nx_modbus_rtu_rsp_exc_t *r = (nx_modbus_rtu_rsp_exc_t *)nx_ref_msg_data(msg);
-    r->addr           = request->addr;
-    r->cmd            = (uint8_t)(request->cmd | NX_MODBUS_RTU_EXCEPTION_FLAG);
+    r->addr           = slave_addr;
+    r->cmd            = (uint8_t)(cmd | NX_MODBUS_RTU_EXCEPTION_FLAG);
     r->exception_code = exception_code;
 
     return reply_send(msg, response_queue, sizeof(*r));

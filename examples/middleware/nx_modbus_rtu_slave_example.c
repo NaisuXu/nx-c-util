@@ -178,9 +178,9 @@ static const uint8_t rw_vals[4] = { 0x00, 0x2Au, 0x01, 0x00u };
 /* ------------------------------------------------------------------ */
 /* Each module only ever gets requests for the ranges it subscribed to, and the slave
  * has already settled structural legality, so it can trust func/addr/quantity and
- * focus on meaning. All three answers go out through the reply_* helpers, which need
- * only the pool and the response queue - no slave handle. Their return value names the
- * reason a reply was not queued, which is what a real module would log. */
+ * focus on meaning. All three answers go out through the reply_* helpers, which take
+ * the relevant request fields directly and need no slave handle. Their return value
+ * names the reason a reply was not queued, which is what a real module would log. */
 static void business_serve(const char *name, nx_queue_t *inbox,
                            nx_queue_t *response_queue, nx_tiered_mem_pool_t *pool)
 {
@@ -212,7 +212,7 @@ static void business_serve(const char *name, nx_queue_t *inbox,
                 data[i * 2 + 1] = (uint8_t)(val & 0xFFu);
             }
             ret = nx_modbus_rtu_slave_reply_read(pool, response_queue,
-                                                 (const nx_modbus_rtu_header_t *)q,
+                                                 rw->addr, rw->cmd,
                                                  data, (size_t)rd_qty * 2u);
         } else if (cmd == NX_MODBUS_FC_WRITE_SINGLE_REG) {
             /* Semantic range check: a valve position is a percentage. The frame is
@@ -221,11 +221,12 @@ static void business_serve(const char *name, nx_queue_t *inbox,
                 printf("  [%s] value %u out of range -> exception 0x%02X\n",
                        name, qty, NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
                 ret = nx_modbus_rtu_slave_reply_exception(pool, response_queue,
-                                                          (const nx_modbus_rtu_header_t *)q,
+                                                          q->addr, q->cmd,
                                                           NX_MODBUS_EXC_ILLEGAL_DATA_VALUE);
             } else {
                 /* Accepted: the write confirmation is the request echoed back. */
-                ret = nx_modbus_rtu_slave_reply_write(pool, response_queue, q);
+                ret = nx_modbus_rtu_slave_reply_write(pool, response_queue,
+                                                      q->addr, q->cmd, start, qty);
             }
         } else {
             /* A read: gather the values (dummy here - each register echoes its address)
@@ -238,7 +239,7 @@ static void business_serve(const char *name, nx_queue_t *inbox,
                 data[i * 2 + 1] = (uint8_t)(val & 0xFFu);
             }
             ret = nx_modbus_rtu_slave_reply_read(pool, response_queue,
-                                                 (const nx_modbus_rtu_header_t *)q,
+                                                 q->addr, q->cmd,
                                                  data, (size_t)qty * 2u);
         }
 
