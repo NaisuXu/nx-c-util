@@ -2,42 +2,43 @@
 
 ## nx_ws2812 — WS2812(B) RGB LED strip driver
 
-A driver for WS2812/WS2812B addressable RGB LEDs that handles only the protocol
-encoding: the caller owns the hardware peripheral (SPI, UART, or timer+DMA) and
-supplies a write callback, while the module turns pixel colors into the exact
-byte stream that peripheral must send. No dynamic memory.
+This driver encodes pixel data for WS2812/WS2812B addressable RGB LEDs. The
+caller manages the hardware peripheral (SPI, UART, or timer with DMA) and
+provides a write callback; the module produces the byte stream for that
+peripheral. It does not allocate memory.
 
-- **Bit-expansion encoding** — WS2812 wants a strict timing protocol (~1.25us bit
-  period, ±150ns tolerance) that no UART/SPI clock hits directly. So each data bit
-  is expanded to one byte on the wire whose high-bit run length sets the high time.
-  The caller supplies both byte patterns in the config (`bit0_pattern` /
-  `bit1_pattern`), so any peripheral, clock, and bit order works — reference values:
-  SPI MSB-first @ 2.4–3.6 MHz is `0xC0` / `0xF8`; UART LSB-first (8N1, inverted TX)
-  @ 2.4–3.2 Mbaud is `0x03` / `0x1F`.
-- **Zero allocation, caller-owned buffers** — two buffers, both sized by macros so
-  they can size static arrays: a pixel buffer (`NX_WS2812_PIXEL_BUF_SIZE`, 3 bytes
-  per LED in GRB order) holding the color state, and a transfer buffer
-  (`NX_WS2812_TX_BUF_SIZE`, 24 bytes per LED plus the reset bytes) that
-  `nx_ws2812_update` rebuilds on every call and may otherwise be treated as scratch.
-- **Non-blocking update with a busy handshake** — `nx_ws2812_update` never blocks.
-  If the peripheral is still sending the previous frame it returns `false`
-  immediately without touching the transfer buffer, leaving the in-flight data
-  intact so a retry is safe. The optional `is_busy` callback drives this and is
-  also exposed as `nx_ws2812_busy`, so a caller polls on its own terms instead of
-  spinning inside the driver — the fit for a DMA-backed transfer. A NULL `is_busy`
-  means writes are assumed complete when `write` returns (correct for blocking
-  transfers).
-- **Lossless global brightness** — WS2812 has no brightness register, so brightness
-  is a per-channel multiply applied while encoding inside `nx_ws2812_update`, never
-  written back into the pixel buffer. The colors you set stay at full resolution, so
-  dimming and raising the level again restores the originals exactly, with no
-  accumulated rounding error.
-- **Pixel operations** — `set_pixel` / `fill` / `set_all` set colors; `get_pixel`
-  reads them back; `clear` blacks the strip; `push` / `push_tail` shift the strip
-  one way or the other and feed a new color in at the freed end, discarding whatever
-  runs off — the primitive for marquee, comet, and VU-meter effects.
-- **Single serial context** — the `write` and `is_busy` callbacks drive the same
-  peripheral, so they share one `io_ctx` passed as their first argument.
+- **Configurable bit-expansion encoding** — the WS2812 protocol uses an
+  approximately 1.25 µs bit period with a ±150 ns high-time tolerance. Each
+  WS2812 data bit is expanded into a configurable 8-bit peripheral pattern whose
+  run of high bits sets the pulse width. The `bit0_pattern` and `bit1_pattern`
+  settings adapt the encoder to supported peripheral clocks and bit orders.
+  Reference patterns are `0xC0` / `0xF8` for MSB-first SPI at 2.4–3.6 MHz and
+  `0x03` / `0x1F` for LSB-first UART at 2.4–3.2 Mbaud (8N1, inverted TX).
+- **Caller-owned buffers** — both buffer sizes are provided by macros suitable
+  for static array declarations. `NX_WS2812_PIXEL_BUF_SIZE` reserves 3 bytes per
+  LED in GRB order for color state. `NX_WS2812_TX_BUF_SIZE` reserves 24 bytes per
+  LED plus the reset bytes for the encoded transfer; `nx_ws2812_update` rebuilds
+  this buffer on every call, and it may otherwise be treated as scratch storage.
+- **Busy-aware updates** — if the peripheral is still sending the previous
+  frame, `nx_ws2812_update` returns `false` immediately without modifying the
+  transfer buffer, so a later retry cannot corrupt in-flight data. The optional
+  `is_busy` callback enables this check and is also exposed through
+  `nx_ws2812_busy`, allowing the caller to poll without spinning inside the
+  driver. This model is well suited to DMA-backed transfers. When `is_busy` is
+  NULL, the transfer is assumed complete when `write` returns; whether that call
+  blocks depends on the callback implementation.
+- **Lossless global brightness** — because WS2812 devices have no brightness
+  register, `nx_ws2812_update` applies the brightness setting as a scale factor
+  to each channel while encoding. It never writes the scaled values back to the
+  pixel buffer, so repeated dimming and brightening does not accumulate rounding
+  error.
+- **Pixel operations** — `set_pixel`, `fill`, and `set_all` set colors;
+  `get_pixel` reads them back; and `clear` sets every pixel to black. `push` and
+  `push_tail` shift the strip in either direction, insert a new color at the
+  vacated end, and discard the pixel shifted past the opposite end. These
+  operations support effects such as marquees, comet trails, and VU meters.
+- **Shared I/O context** — the `write` and `is_busy` callbacks operate on the
+  same peripheral, so both receive the same `io_ctx` as their first argument.
 - **Not thread-safe** — serialize access from multiple contexts yourself.
 
 ```c
@@ -77,48 +78,52 @@ if (!nx_ws2812_update(&strip)) {
 }
 ```
 
-> **Note:** `nx_ws2812_update` returning `true` means the peripheral *accepted* the
-> write, not that the LEDs have latched it — with DMA the transfer continues in the
-> background, and `nx_ws2812_busy` reports when it has finished. Pick `bit0_pattern`
-> / `bit1_pattern` and `reset_bytes` for your actual clock: the high-time window is
-> only ±150ns wide, and the reset gap must hold the line low long enough to latch
-> (>50us for WS2812, >280us on some WS2812B revisions).
+> **Note:** A `true` return from `nx_ws2812_update` means that the peripheral
+> accepted the write; it does not mean that the LEDs have latched the frame. With
+> DMA, transmission continues in the background, and `nx_ws2812_busy` reports
+> when it has finished. Select `bit0_pattern`, `bit1_pattern`, and `reset_bytes`
+> for the actual peripheral clock. The high-time tolerance is only ±150 ns, and
+> the reset interval must hold the line low long enough to latch the frame: more
+> than 50 µs for WS2812 devices and more than 280 µs for some WS2812B revisions.
 
 ## nx_kth7112 — KTH7112 magnetic angle encoder over SPI
 
-A driver for the KTH7112 16-bit magnetic angle encoder, covering its three-wire SPI
-protocol (Mode 3): command bytes, frame shapes, the CRC-8 the part appends to every
-read, and the register-lock state machine. The caller owns the SPI port and supplies
-chip-select, write, read and delay callbacks. No dynamic memory, no floating point.
+This driver implements the KTH7112 three-wire SPI Mode 3 protocol, including
+command framing, read-response CRC validation, and register locking. The caller
+manages the SPI port and provides chip-select, write, read, and optional timing
+callbacks. The module does not allocate memory or use floating-point arithmetic.
 
-- **Frame-level API** — `nx_kth7112_read_angle` returns the raw 16-bit code, and
-  `nx_kth7112_read_reg8` / `_write_reg8` / `_read_reg16` / `_write_reg16` reach the
-  register bank. One call is one chip-select frame, executed synchronously: a frame
-  is a handful of bytes, far shorter than a control cycle, so there is nothing to
-  spread across iterations. `nx_kth7112_raw_to_mdeg` converts a code to
-  millidegrees for callers that want degrees without floating point.
-- **CRC-8/ITU on every read, verified before the value is released** — the part
-  appends polynomial `0x07` / init `0x00` / xorout `0x55`, computed here from the
-  module's own 256-entry table. A mismatch returns `NX_KTH7112_ERR_CRC` and leaves
-  the caller's output variable untouched, so a failed read can never be mistaken for
-  a good one.
-- **Register writes are acknowledged** — a write answers with the value the part
-  accepted, in the same frame, and the driver compares that echo against what it
-  sent. A mismatch is `NX_KTH7112_ERR_IO`: the write went unacknowledged rather than
-  merely unauthorised.
-- **The lock state is tracked, and a locked write never reaches the bus** — the part
-  is locked at power-up and discards register writes silently. The driver tracks the
-  state itself and returns `NX_KTH7112_ERR_LOCKED` from a write issued while locked
-  without putting a frame on the wire. Unlocking may be repeated, so calling
-  `nx_kth7112_unlock` again is how the state is re-established.
-- **Low byte at the low address** — the multi-byte fields are stored low byte first,
-  so `NX_KTH7112_REG_ZERO_L` addresses `ZERO[7:0]` and `NX_KTH7112_REG_ZERO_H` the
-  high byte. `_read_reg16` / `_write_reg16` take the low byte's address and move both
-  bytes, each with its own CRC and echo check.
-- **Optional callbacks stay optional** — `is_busy` and `delay_ns` may each be NULL.
-  A NULL `is_busy` means the port is assumed ready, which suits blocking transfers;
-  a NULL `delay_ns` skips the inter-frame wait, which is correct only when the port
-  already guarantees it.
+- **Synchronous frame-level API** — `nx_kth7112_read_angle` returns the raw
+  16-bit angle code. `nx_kth7112_read_reg8`, `nx_kth7112_write_reg8`,
+  `nx_kth7112_read_reg16`, and `nx_kth7112_write_reg16` access the register bank.
+  Each call synchronously executes the required chip-select frame or frames in
+  the caller's context. `nx_kth7112_raw_to_mdeg` converts a raw code to
+  millidegrees without floating-point arithmetic.
+- **CRC-8/ITU validation on every read** — the device appends a CRC byte to each
+  read response. The CRC uses polynomial `0x07`, initial value `0x00`, no input
+  or output reflection, and xorout `0x55`; its check value for `"123456789"` is
+  `0xA1`. The driver calculates it with an internal 256-entry table and validates
+  it before returning data. A mismatch returns `NX_KTH7112_ERR_CRC` and leaves
+  the caller's output variable unchanged.
+- **Verified register writes** — the device echoes the accepted value in the
+  same frame, and the driver compares that value with the byte it sent. A
+  mismatch returns `NX_KTH7112_ERR_IO`.
+- **Software-tracked lock state** — the device powers up with register writes
+  locked and silently ignores writes while locked. The driver also starts in the
+  locked state and returns `NX_KTH7112_ERR_LOCKED` without accessing the bus when
+  a write is attempted. `nx_kth7112_unlock` may be called repeatedly; call it
+  again after reinitializing the driver or whenever the hardware lock state may
+  have changed.
+- **Low byte at the low address** — multi-byte fields store their low byte at
+  the lower address. For example, `NX_KTH7112_REG_ZERO_L` addresses `ZERO[7:0]`
+  and `NX_KTH7112_REG_ZERO_H` addresses `ZERO[15:8]`.
+  `nx_kth7112_read_reg16` and `nx_kth7112_write_reg16` take the low-byte address
+  and access both registers in separate frames, each with its own CRC check or
+  echo verification.
+- **Optional port-state callbacks** — `is_busy` and `delay_ns` may be NULL. A
+  NULL `is_busy` means that the port is assumed ready, which suits blocking
+  transfers. A NULL `delay_ns` omits the driver's inter-frame delay, so the port
+  must satisfy that timing requirement itself.
 - **Not thread-safe** — the lock state lives in the handle, so serialize access from
   multiple contexts yourself.
 
@@ -149,14 +154,14 @@ nx_kth7112_write_mtp(&enc);                              /* make it survive powe
 nx_kth7112_lock(&enc);                                   /* refuse further writes */
 ```
 
-> **Note:** `nx_kth7112_write_mtp` burns the register bank into non-volatile memory
-> and is irreversible. The part needs more than `NX_KTH7112_MTP_MIN_INTERVAL_MS`
-> (400 ms) between burns, which the driver cannot measure since it holds no time
-> source — space the calls yourself and never let power drop mid-burn. Two further
-> timing requirements belong to the port rather than the driver: the SCK high time of
-> the 24th clock of a register write must exceed 100 ns, and two frames must be more
-> than 150 ns apart. These are comfortable at a few MHz and marginal at the part's
-> 10 Mbps ceiling, where the clock period is the 100 ns minimum itself, so check
-> what your port actually runs — and that it does not stretch its final clock — then
-> use `delay_ns` if either interval needs help.
+> **Note:** `nx_kth7112_write_mtp` programs the register bank into nonvolatile
+> memory, and the operation is irreversible. The application must leave more
+> than `NX_KTH7112_MTP_MIN_INTERVAL_MS` (400 ms) between programming operations
+> and maintain stable power while programming. The SPI port must also keep the
+> high phase of the 24th clock in a register-write frame longer than 100 ns and
+> leave more than 150 ns between frames. Configure the SPI clock and final-clock
+> behavior to meet the first requirement. The driver requests a 150 ns delay
+> through `delay_ns` after each frame; the callback or the port must ensure that
+> the actual gap exceeds 150 ns. Near the device's 10 Mbps limit, verify both
+> timings explicitly.
 

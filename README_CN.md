@@ -1,24 +1,24 @@
 # nx-c-util
 
-[简体中文](/README_CN.md) | [English](/README.md)
+[简体中文](README_CN.md) | [English](README.md)
 
 ## 简介
 
-一个用纯 C 实现的工具库，为嵌入式开发提供简单、便捷的基础构件。
+`nx-c-util` 是一个用纯 C 编写的嵌入式工具库，提供可按需组合的基础模块。
 
 每个组件都遵循同样的设计理念：
 
-- **纯静态** —— 所有存储都由调用者提供；库不使用任何动态内存，也不依赖 `malloc`/`free`，适用于没有堆的目标平台。
-- **确定性** —— 操作可预测、耗时恒定、无隐藏开销，非常适合实时系统。
-- **可移植** —— 标准 C11、无平台相关依赖；在 Windows、Linux、macOS 上都能构建和运行，且构建方式一致。
+- **不使用动态内存** —— 所有存储均由调用方提供，不依赖 `malloc`/`free`，适合无堆环境。
+- **资源使用可预测** —— 各模块明确给出存储需求、配置项和失败路径，便于在资源受限和实时系统中使用。
+- **便于移植** —— 使用标准 C11，不依赖特定平台，可在 Windows、Linux 和 macOS 上构建运行。
 
 ## 目录结构
 
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # 核心构件（list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log）
-│   ├── middleware/   # 协议解析器和协议栈（modbus_rtu, modbus_rtu_slave, modbus_rtu_master, can_bus, tp_sdu, can_isotp）
+│   ├── core/         # 核心数据结构与工具
+│   ├── middleware/   # 协议与诊断中间件
 │   ├── algo/         # 算法（crc, sha256）
 │   └── device/       # 平台无关的设备驱动（ws2812, kth7112）
 └── examples/
@@ -28,11 +28,12 @@ nx-c-util/
     └── device/       # 设备驱动使用示例
 ```
 
-每个模块都设计为可以独立使用。集成进你的项目时，只需把用到的 `.c` 和 `.h` 文件拷过来即可。头文件采用单层 include（如 `#include "nx_list.h"`），不带子目录前缀，所以把拷贝文件所在目录加入你的 include 路径就行。
+各模块可独立集成。只需复制所需的 `.c` 和 `.h` 文件，并将其所在目录加入头文件搜索路径。头文件采用扁平引用方式，例如 `#include "nx_list.h"`，不带子目录前缀。
 
 ## 模块
 
 ### 核心模块
+
 - [nx_list](docs/core_cn.md#nx_list--侵入式双向循环链表) — 侵入式双向循环链表
 - [nx_queue](docs/core_cn.md#nx_queue--通用环形缓冲fifo队列) — 通用环形缓冲（FIFO）队列
 - [nx_ringbuf](docs/core_cn.md#nx_ringbuf--面向字节的环形缓冲) — 面向字节的环形缓冲
@@ -41,35 +42,38 @@ nx-c-util/
 - [nx_timer](docs/core_cn.md#nx_timer--软件定时器管理器) — 软件定时器管理器
 - [nx_coro](docs/core_cn.md#nx_coro--无栈协程) — 无栈协程
 - [nx_lock](docs/core_cn.md#nx_lock--可插拔的临界区抽象) — 可插拔的临界区抽象
-- [nx_log](docs/core_cn.md#nx_log--静态异步明文日志) — 静态异步明文日志
+- [nx_log](docs/core_cn.md#nx_log--使用调用方存储的异步文本日志) — 使用调用方存储的异步文本日志
 - [nx_event_flags](docs/core_cn.md#nx_event_flags--协作式循环的轮询事件标志) — 协作式循环的轮询事件标志
 
 详细说明和示例请参阅[核心模块文档](docs/core_cn.md)。
 
 ### 中间件模块
+
 - [nx_can_bus](docs/middleware_cn.md#nx_can_bus--can--can-fd-帧结构与辅助函数) — CAN / CAN FD 帧结构与辅助函数
 - [nx_modbus_rtu](docs/middleware_cn.md#nx_modbus_rtu--modbus-rtu-帧结构与-crc) — Modbus RTU 帧结构与 CRC
 - [nx_modbus_rtu_slave](docs/middleware_cn.md#nx_modbus_rtu_slave--事件驱动的-rtu-从站帧--订阅分发) — 事件驱动的 RTU 从站：帧 → 订阅分发
 - [nx_modbus_rtu_master](docs/middleware_cn.md#nx_modbus_rtu_master--事件驱动的-rtu-主站队列--线路--订阅分发) — 事件驱动的 RTU 主站：队列 → 线路 → 订阅分发
 - [nx_tp_sdu](docs/middleware_cn.md#nx_tp_sdu--传输层服务数据单元) — 传输层服务数据单元
 - [nx_can_isotp](docs/middleware_cn.md#nx_can_isotp--iso-15765-2docan--iso-tp分段传输) — ISO 15765-2（DoCAN / ISO-TP）分段传输
-- [nx_uds](docs/middleware_cn.md#nx_uds--iso-14229-词汇表) — ISO 14229 词汇表
+- [nx_uds](docs/middleware_cn.md#nx_uds--iso-14229-公共类型与服务描述) — ISO 14229 公共类型与服务描述
 - [nx_uds_server](docs/middleware_cn.md#nx_uds_server--iso-14229-诊断服务器ecu-侧) — ISO 14229 诊断服务器（ECU 侧）
-- [nx_uds_svc_session](docs/middleware_cn.md#nx_uds_svc_session--始终需要的服务处理器) — 始终需要的服务处理器
-- [nx_uds_svc_sec](docs/middleware_cn.md#nx_uds_svc_sec--027-种子密钥交换) — 0x27 种子/密钥交换
-- [nx_uds_svc_transfer](docs/middleware_cn.md#nx_uds_svc_transfer--搬移一块内存) — 搬移一块内存
-- [nx_uds_tp_bind](docs/middleware_cn.md#nx_uds_tp_bind--把服务器接到某个传输层) — 把服务器接到某个传输层
-- [nx_uds_client](docs/middleware_cn.md#nx_uds_client--iso-14229-诊断客户端测试工具侧) — ISO 14229 诊断客户端（测试工具侧）
+- [nx_uds_svc_session](docs/middleware_cn.md#nx_uds_svc_session--基础会话与复位服务) — 基础会话与复位服务
+- [nx_uds_svc_sec](docs/middleware_cn.md#nx_uds_svc_sec--0x27-种子密钥交换) — 0x27 种子/密钥交换
+- [nx_uds_svc_transfer](docs/middleware_cn.md#nx_uds_svc_transfer--内存上传与下载服务) — 内存上传与下载服务
+- [nx_uds_tp_bind](docs/middleware_cn.md#nx_uds_tp_bind--uds-端点与传输层绑定) — UDS 端点与传输层绑定
+- [nx_uds_client](docs/middleware_cn.md#nx_uds_client--iso-14229-诊断客户端测试仪侧) — ISO 14229 诊断客户端（测试仪侧）
 
 详细说明和示例请参阅[中间件模块文档](docs/middleware_cn.md)。
 
 ### 算法模块
+
 - [nx_crc](docs/algo_cn.md#nx_crc--crc-8--crc-16--crc-32-校验) — CRC-8 / CRC-16 / CRC-32 校验
 - [nx_sha256](docs/algo_cn.md#nx_sha256--sha-256-密码学哈希) — SHA-256 密码学哈希
 
 详细说明和示例请参阅[算法模块文档](docs/algo_cn.md)。
 
 ### 设备模块
+
 - [nx_ws2812](docs/device_cn.md#nx_ws2812--ws2812b-rgb-灯带驱动) — WS2812/WS2812B RGB LED 灯带驱动
 - [nx_kth7112](docs/device_cn.md#nx_kth7112--kth7112-磁编码器-spi-驱动) — KTH7112 16 位磁编码器 SPI 驱动
 
@@ -78,9 +82,7 @@ nx-c-util/
 
 ## 使用
 
-库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`、`src/device/`），可以直接拖进你的项目——大多数模块除了标准 C 之外没有任何依赖，可以独立使用。头文件采用单层 include（如 `#include "nx_list.h"`），所以把拷贝文件所在目录加入你的 include 路径即可。
-
-`examples/core/`、`examples/middleware/`、`examples/algo/` 和 `examples/device/` 目录里装有每个模块的可运行示例，全部由 CMake 驱动，因此在任何平台上都以相同方式构建。
+`examples/core/`、`examples/middleware/`、`examples/algo/` 和 `examples/device/` 包含各模块的可运行示例，并可在所有受支持的平台上通过 CMake 构建。
 
 ### 构建并运行示例
 
@@ -96,10 +98,10 @@ cmake --build build
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_core_examples        # 核心模块（list, queue, ringbuf, mem_pool, ref_msg, timer, coro）
-  ./build/nx_middleware_examples  # 中间件模块（modbus_rtu_slave, modbus_rtu_master, can_isotp）
-  ./build/nx_algo_examples        # 算法模块（crc, sha256）
-  ./build/nx_device_examples      # 设备驱动（ws2812, kth7112）
+  ./build/nx_core_examples        # 全部核心模块示例
+  ./build/nx_middleware_examples  # 全部中间件模块示例
+  ./build/nx_algo_examples        # 算法模块示例
+  ./build/nx_device_examples      # 设备驱动示例
   ```
 
 - **Windows (MinGW / MSYS)**
@@ -122,24 +124,24 @@ cmake --build build
 
 ### 选择生成器
 
-`cmake -S . -B build` 使用你平台上的默认生成器，多数情况下已经够用。要显式指定一个，传 `-G` 即可：
+`cmake -S . -B build` 会使用当前平台的默认生成器。需要显式选择时，可通过 `-G` 指定：
 
 ```sh
-# Windows, MinGW toolchain
+# Windows，MinGW 工具链
 cmake -S . -B build -G "MinGW Makefiles"
 
-# Windows, Visual Studio 2022
+# Windows，Visual Studio 2022
 cmake -S . -B build -G "Visual Studio 17 2022"
 
-# Linux / macOS, Unix Makefiles
+# Linux / macOS，Unix Makefiles
 cmake -S . -B build -G "Unix Makefiles"
 
-# Any platform with Ninja installed
+# 已安装 Ninja 的任意平台
 cmake -S . -B build -G "Ninja"
 ```
 
-需要 CMake 3.10 或更新版本，以及一个支持 C11 的编译器（GCC、Clang 或 MSVC）。
+构建环境需要 CMake 3.10 或更高版本，以及支持 C11 的编译器（GCC、Clang 或 MSVC）。
 
 ## 许可证
 
-本项目采用 MIT 许可证，详见 LICENSE 文件。
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。

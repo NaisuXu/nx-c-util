@@ -1,29 +1,29 @@
 # nx-c-util
 
-[简体中文](/README_CN.md) | [English](/README.md)
+[简体中文](README_CN.md) | [English](README.md)
 
-## Brief
+## Overview
 
-A utility library implemented in pure C, designed to provide simple and
-convenient building blocks for embedded development.
+`nx-c-util` is a pure C library of small, composable building blocks for
+embedded development.
 
-Every component follows the same design philosophy:
+The modules share three design goals:
 
-- **Purely static** — all storage is provided by the caller; the library uses no
-  dynamic memory and does not depend on `malloc`/`free`, making it suitable for
-  heap-less targets.
-- **Deterministic** — predictable, constant-time operations with no hidden
-  overhead, well suited to real-time systems.
-- **Portable** — standard C11 with no platform-specific dependencies; builds and
-  runs on Windows, Linux, and macOS alike.
+- **No dynamic allocation** — callers provide all storage, and the library does
+  not depend on `malloc` or `free`, making it suitable for heapless targets.
+- **Predictable resource use** — modules expose their storage, configuration,
+  and failure paths, making them straightforward to use in constrained and
+  real-time systems.
+- **Portability** — the code uses standard C11 and has no platform-specific
+  dependencies. It builds on Windows, Linux, and macOS.
 
 ## Directory Structure
 
 ```
 nx-c-util/
 ├── src/
-│   ├── core/         # Core building blocks (list, queue, ringbuf, timer, coro, ref_msg, mem_pool, lock, log)
-│   ├── middleware/   # Protocol parsers and stacks (modbus_rtu, modbus_rtu_slave, modbus_rtu_master, can_bus, tp_sdu, can_isotp)
+│   ├── core/         # Core data structures and utilities
+│   ├── middleware/   # Protocol and diagnostic middleware
 │   ├── algo/         # Algorithms (crc, sha256)
 │   └── device/       # Platform-independent device drivers (ws2812, kth7112)
 └── examples/
@@ -33,15 +33,15 @@ nx-c-util/
     └── device/       # Device driver usage examples
 ```
 
-Each module is designed to be independently usable. To integrate into your project,
-simply copy the needed `.c` and `.h` files. Headers use single-level includes 
-(e.g., `#include "nx_list.h"`) with no subdirectory prefix, so add the directory 
-containing the copied files to your include path.
+Modules can be integrated independently. Copy the required `.c` and `.h` files
+and add their directories to the include path. Headers use flat includes such
+as `#include "nx_list.h"`, without subdirectory prefixes.
 
 ## Modules
 
 ### Core Modules
-- [nx_list](docs/core_en.md#nx_list--intrusive-doubly-linked-circular-list) — intrusive doubly-linked circular list
+
+- [nx_list](docs/core_en.md#nx_list--intrusive-circular-doubly-linked-list) — intrusive circular doubly linked list
 - [nx_queue](docs/core_en.md#nx_queue--generic-ring-buffer-fifo-queue) — generic ring-buffer (FIFO) queue
 - [nx_ringbuf](docs/core_en.md#nx_ringbuf--byte-oriented-ring-buffer) — byte-oriented ring buffer
 - [nx_tiered_mem_pool](docs/core_en.md#nx_tiered_mem_pool--tiered-static-memory-pool) — tiered static memory pool
@@ -49,12 +49,13 @@ containing the copied files to your include path.
 - [nx_timer](docs/core_en.md#nx_timer--software-timer-manager) — software timer manager
 - [nx_coro](docs/core_en.md#nx_coro--stackless-coroutines) — stackless coroutines
 - [nx_lock](docs/core_en.md#nx_lock--pluggable-critical-section-abstraction) — pluggable critical-section abstraction
-- [nx_log](docs/core_en.md#nx_log--static-asynchronous-plain-text-logging) — static asynchronous plain-text logging
+- [nx_log](docs/core_en.md#nx_log--asynchronous-logging-with-caller-owned-storage) — asynchronous logging with caller-owned storage
 - [nx_event_flags](docs/core_en.md#nx_event_flags--polled-event-flags-for-cooperative-loops) — polled event flags for cooperative loops
 
 See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and examples.
 
 ### Middleware Modules
+
 - [nx_can_bus](docs/middleware_en.md#nx_can_bus--can--can-fd-frame-structures-and-helpers) — CAN / CAN FD frame structures and helpers
 - [nx_modbus_rtu](docs/middleware_en.md#nx_modbus_rtu--modbus-rtu-frame-structures-and-crc) — Modbus RTU frame structures and CRC
 - [nx_modbus_rtu_slave](docs/middleware_en.md#nx_modbus_rtu_slave--event-driven-rtu-slave-frame--subscription-dispatch) — event-driven RTU slave: frame → subscription dispatch
@@ -63,21 +64,23 @@ See [Core Modules Documentation](docs/core_en.md) for detailed descriptions and 
 - [nx_can_isotp](docs/middleware_en.md#nx_can_isotp--iso-15765-2-docan--iso-tp-segmented-transport) — ISO 15765-2 (DoCAN / ISO-TP) segmented transport
 - [nx_uds](docs/middleware_en.md#nx_uds--iso-14229-vocabulary) — ISO 14229 vocabulary
 - [nx_uds_server](docs/middleware_en.md#nx_uds_server--iso-14229-diagnostic-server-ecu-side) — ISO 14229 diagnostic server (ECU side)
-- [nx_uds_svc_session](docs/middleware_en.md#nx_uds_svc_session--the-always-needed-service-handlers) — the always-needed service handlers
-- [nx_uds_svc_sec](docs/middleware_en.md#nx_uds_svc_sec--027-seedkey-exchange) — 0x27 seed/key exchange
-- [nx_uds_svc_transfer](docs/middleware_en.md#nx_uds_svc_transfer--moving-a-block-of-memory) — moving a block of memory
-- [nx_uds_tp_bind](docs/middleware_en.md#nx_uds_tp_bind--joining-the-server-to-a-transport) — joining the server to a transport
-- [nx_uds_client](docs/middleware_en.md#nx_uds_client--iso-14229-diagnostic-client-the-test-tool-side) — ISO 14229 diagnostic client (the test tool side)
+- [nx_uds_svc_session](docs/middleware_en.md#nx_uds_svc_session--core-session-and-reset-services) — core session and reset services
+- [nx_uds_svc_sec](docs/middleware_en.md#nx_uds_svc_sec--0x27-seedkey-exchange) — 0x27 seed/key exchange
+- [nx_uds_svc_transfer](docs/middleware_en.md#nx_uds_svc_transfer--memory-upload-and-download-services) — memory upload and download services
+- [nx_uds_tp_bind](docs/middleware_en.md#nx_uds_tp_bind--binding-a-uds-endpoint-to-a-transport) — binding a UDS endpoint to a transport
+- [nx_uds_client](docs/middleware_en.md#nx_uds_client--iso-14229-diagnostic-client-tester-side) — ISO 14229 diagnostic client (tester side)
 
 See [Middleware Modules Documentation](docs/middleware_en.md) for detailed descriptions and examples.
 
 ### Algorithm Modules
+
 - [nx_crc](docs/algo_en.md#nx_crc--crc-8--crc-16--crc-32-checksums) — CRC-8 / CRC-16 / CRC-32 checksums
 - [nx_sha256](docs/algo_en.md#nx_sha256--sha-256-cryptographic-hash) — SHA-256 cryptographic hash
 
 See [Algorithm Modules Documentation](docs/algo_en.md) for detailed descriptions and examples.
 
 ### Device Modules
+
 - [nx_ws2812](docs/device_en.md#nx_ws2812--ws2812b-rgb-led-strip-driver) — WS2812/WS2812B RGB LED strip driver
 - [nx_kth7112](docs/device_en.md#nx_kth7112--kth7112-magnetic-angle-encoder-over-spi) — KTH7112 16-bit magnetic angle encoder over SPI
 
@@ -86,15 +89,9 @@ See [Device Modules Documentation](docs/device_en.md) for detailed descriptions 
 
 ## Usage
 
-The library sources are organized by category under `src/` (`src/core/`, 
-`src/middleware/`, `src/algo/`, `src/device/`) and can be dropped into your 
-project — most modules have no dependencies beyond standard C and can be used 
-independently. Headers use single-level includes (e.g., `#include "nx_list.h"`), 
-so add the directory containing the copied files to your include path.
-
-The `examples/core/`, `examples/middleware/`, `examples/algo/`, and `examples/device/` 
-directories contain runnable usage examples for every module, driven through CMake so they 
-build the same way on any platform.
+The `examples/core/`, `examples/middleware/`, `examples/algo/`, and
+`examples/device/` directories contain runnable examples for every module. They
+are built with CMake on all supported platforms.
 
 ### Build and run the examples
 
@@ -110,10 +107,10 @@ Then run the produced executables:
 - **Linux / macOS**
 
   ```sh
-  ./build/nx_core_examples        # Core modules (list, queue, ringbuf, mem_pool, ref_msg, timer, coro)
-  ./build/nx_middleware_examples  # Middleware modules (modbus_rtu_slave, modbus_rtu_master, can_isotp)
-  ./build/nx_algo_examples        # Algorithm modules (crc, sha256)
-  ./build/nx_device_examples      # Device drivers (ws2812, kth7112)
+  ./build/nx_core_examples        # All core module examples
+  ./build/nx_middleware_examples  # All middleware module examples
+  ./build/nx_algo_examples        # Algorithm module examples
+  ./build/nx_device_examples      # Device driver examples
   ```
 
 - **Windows (MinGW / MSYS)**
@@ -125,7 +122,7 @@ Then run the produced executables:
   ./build/nx_device_examples.exe
   ```
 
-- **Windows (Visual Studio / MSVC)** — multi-config generators place the binary
+- **Windows (Visual Studio / MSVC)** — multi-config generators place the binaries
   in a per-config subdirectory:
 
   ```sh
@@ -137,8 +134,8 @@ Then run the produced executables:
 
 ### Choosing a generator
 
-`cmake -S . -B build` uses your platform's default generator, which is enough in
-most cases. To pick one explicitly, pass `-G`:
+`cmake -S . -B build` uses the platform's default generator. To select one
+explicitly, pass `-G`:
 
 ```sh
 # Windows, MinGW toolchain
@@ -159,4 +156,4 @@ required.
 
 ## License
 
-This project is under the MIT licence, see the LICENSE file.
+This project is licensed under the [MIT License](LICENSE).

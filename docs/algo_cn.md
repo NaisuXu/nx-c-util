@@ -1,32 +1,32 @@
 # 算法模块
-### nx_crc —— CRC-8 / CRC-16 / CRC-32 校验
 
-按位计算的 CRC 例程，不用查找表，因此无需预分配或存储任何东西，每次调用都是确定性的。
+## nx_crc —— CRC-8 / CRC-16 / CRC-32 校验
 
-- **三个层次** —— 面向常见标准的命名封装；接受 Rocksoft 模型参数（多项式、初值、输入/输出反射、最终异或）以支持任意变体的通用一次性函数（`nx_crc8_compute` / `nx_crc16_compute` / `nx_crc32_compute`）；以及为分片到达数据准备的增量上下文 API（`nx_crc_init` / `nx_crc_update` / `nx_crc_final`）。分片计算与一次性调用得到完全相同的结果。
+一组按位计算 CRC-8、CRC-16 和 CRC-32 的函数。实现不使用查找表，静态数据占用较小且固定。
+
+- **三层接口** —— 常用标准可直接调用命名函数；其他变体可通过一次性计算函数 `nx_crc8_compute`、`nx_crc16_compute` 或 `nx_crc32_compute` 传入 Rocksoft 模型参数；分段到达的数据则使用增量接口 `nx_crc_init`、`nx_crc_update` 和 `nx_crc_final`。增量计算与一次性计算会得到相同结果。
 - **内置标准变体** —— CRC-8、CRC-8/ITU、CRC-8/ROHC、CRC-8/MAXIM；CRC-16/IBM/MAXIM/USB/MODBUS/CCITT/CCITT-FALSE/X25/XMODEM；CRC-32 和 CRC-32/MPEG-2。每个变体都在头文件中注明了参数及其校验值（即 `"123456789"` 的 CRC 结果）。
-- **无表** —— 一个按位内核处理所有位宽和 refin/refout 组合，因此不编入任何多项式表，代码小、不占表 RAM。
-- **NULL 安全** —— 数据指针为 NULL 时不贡献任何字节（视作零长缓冲），而非解引用；上下文为 NULL 时是空操作。存储由调用者拥有，库不使用任何动态内存。
+- **无需查找表** —— 同一个按位内核处理不同位宽及 `refin` / `refout` 组合，不需要多项式查找表。
+- **调用方持有状态，NULL 行为明确** —— 模块不使用动态内存。`nx_crc_init` 和 `nx_crc_update` 会忽略 `NULL` 上下文，`nx_crc_update` 也会忽略 `NULL` 数据指针；`nx_crc_final(NULL)` 返回 0。
 
 ```c
 #include "nx_crc.h"
 
 const char *msg = "123456789";
 
-/* a named standard variant */
+/* 直接调用已命名的标准变体 */
 uint16_t c1 = nx_crc16_modbus(msg, 9);      /* 0x4B37 */
 uint32_t c2 = nx_crc32(msg, 9);             /* 0xCBF43926 */
 
-/* any other variant via the generic function
- * (here: CRC-16/MODBUS spelled out explicitly) */
+/* 通过通用函数描述其他变体；这里显式给出 CRC-16/MODBUS 参数 */
 uint16_t c3 = nx_crc16_compute(msg, 9,
-                               0x8005,      /* poly   */
-                               0xFFFF,      /* init   */
-                               true, true,  /* refin, refout */
-                               0x0000);     /* xorout */
-/* c3 == c1 */
+                               0x8005,      /* 多项式 */
+                               0xFFFF,      /* 初始值 */
+                               true, true,  /* 输入/输出反射 */
+                               0x0000);     /* 输出异或值 */
+/* c3 与 c1 相等 */
 
-/* the same CRC, fed in over several chunks */
+/* 分段输入同一份数据 */
 nx_crc_ctx_t ctx;
 nx_crc_init(&ctx, 16, 0x8005, 0xFFFF, true, true, 0x0000);
 nx_crc_update(&ctx, msg, 4);                /* "1234"  */
@@ -35,25 +35,25 @@ uint16_t c4 = (uint16_t)nx_crc_final(&ctx); /* == c1 */
 ```
 
 
-### nx_sha256 —— SHA-256 密码学哈希
+## nx_sha256 —— SHA-256 密码学哈希
 
-一个纯 C 的 SHA-256（FIPS 180-4）实现，产生 32 字节摘要。
+一个符合 FIPS 180-4 的纯 C SHA-256 实现，输出 32 字节摘要。
 
-- **两种哈希方式** —— 针对整块缓冲的一次性辅助函数（`nx_sha256`），以及为分片到达数据准备的增量上下文 API（`nx_sha256_init` / `nx_sha256_update` / `nx_sha256_final`）。分片计算与一次性调用得到完全相同的摘要。
-- **固定的、调用者拥有的存储** —— 运行状态是调用者放在栈上的单个 `nx_sha256_ctx_t`；无动态内存，除固定的轮常量外无任何表，完全确定性。
-- **NULL 安全** —— 数据指针为 NULL 时不贡献任何字节；上下文或摘要指针为 NULL 时是无害的空操作。
-- **纯哈希，而非 MAC** —— 若需要消息认证，在其之上构建 HMAC-SHA256。
+- **两种计算方式** —— 完整缓冲区可直接调用 `nx_sha256`；分段到达的数据使用 `nx_sha256_init` / `nx_sha256_update` / `nx_sha256_final`。两种方式生成相同的摘要。
+- **固定且由调用方持有的状态** —— 增量计算只需一个 `nx_sha256_ctx_t`，可由调用方放在栈上。实现不使用动态内存，除固定的轮常量表外也不需要其他查找表。
+- **NULL 行为明确** —— `NULL` 数据指针不提供任何输入字节；必要的上下文或摘要指针为 `NULL` 时，函数会安全返回且不生成输出。
+- **仅提供哈希，不提供 MAC** —— SHA-256 本身不能认证消息。需要消息认证时，应使用经过验证的 HMAC-SHA256 实现。
 
 ```c
 #include "nx_sha256.h"
 
 uint8_t digest[NX_SHA256_DIGEST_SIZE];
 
-/* one-shot */
+/* 一次性计算 */
 nx_sha256("abc", 3, digest);
-/* digest = ba7816bf 8f01cfea ... f20015ad */
+/* 摘要 = ba7816bf 8f01cfea ... f20015ad */
 
-/* the same digest, fed in over several chunks */
+/* 分段输入得到相同摘要 */
 nx_sha256_ctx_t ctx;
 nx_sha256_init(&ctx);
 nx_sha256_update(&ctx, "a", 1);
@@ -63,9 +63,9 @@ nx_sha256_final(&ctx, digest);
 
 ## 使用
 
-库的源码在 `src/` 下按类别组织（`src/core/`、`src/middleware/`、`src/algo/`），可以直接拖进你的项目，大多数模块除了标准 C 外没有依赖，可以独立使用。头文件使用单层 include（如`#include "nx_list.h"`），因此把拷贝文件所在的目录加入你的 include 路径即可。
+算法模块位于 `src/algo/`。可将所需的 `.c` 和 `.h` 文件直接复制到项目中，并把文件所在目录加入头文件搜索路径。
 
-`examples/core/` 目录包含每个模块可运行的用法示例，通过 CMake 驱动，在任何平台上都以相同方式构建。
+`examples/algo/` 中提供了可运行的示例，并通过 CMake 统一构建。
 
 ### 构建并运行示例
 

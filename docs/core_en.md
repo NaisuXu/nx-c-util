@@ -1,26 +1,26 @@
 # Core Modules
 
-## nx_list — intrusive doubly-linked circular list
+## nx_list — intrusive circular doubly linked list
 
-A header-only intrusive list (Linux `list_head` style). The user embeds a link
-node directly in their struct, so adding an item to the list only moves pointers
-— no copy, no allocation, and the user struct stays exactly where it was
-allocated. A doubly-linked circular layout (the sentinel head forms a ring)
-means inserts and deletes have no head/tail special cases.
+A header-only intrusive list in the style of Linux `list_head`. Each containing
+structure embeds its own link node, so insertion and removal update pointers
+without copying or allocating the containing object. A sentinel head closes the
+list into a ring, eliminating special cases at the head and tail.
 
-- **Intrusive** — the user embeds `nx_list_t` in their struct; `nx_list_entry`
-  (a `container_of` macro) recovers the containing struct from the link.
-- **Doubly-linked circular** — a sentinel head's `next` points to the first real
-  node and `prev` to the last, forming a ring. Empty is `head->next == head`.
-- **Symmetric add/del** — insert after any position with `nx_list_add`; delete a
-  node from anywhere without knowing the head. Head and tail insertion are
-  trivial wrappers (`nx_list_add_head` / `nx_list_add_tail`).
+- **Intrusive storage** — embed `nx_list_t` in the containing structure;
+  `nx_list_entry` recovers that structure from its link node.
+- **Circular, doubly linked layout** — the sentinel's `next` points to the first
+  item and its `prev` points to the last. The list is empty when
+  `head->next == head`.
+- **Uniform insertion and removal** — `nx_list_add` inserts after any position,
+  while `nx_list_del` removes a node without requiring the list head.
+  `nx_list_add_head` and `nx_list_add_tail` provide the common wrappers.
 - **Safe iteration** — `nx_list_for_each` for read-only traversal,
   `nx_list_for_each_safe` for deletion during iteration (saves `next` before
   invoking the body, so the current node can be deleted without breaking the
   loop).
-- **Zero allocation** — every node lives in the caller's storage; the list
-  itself is just link pointers.
+- **Zero allocation** — every node lives in caller-owned storage; the list
+  itself consists only of link pointers.
 - **Header-only** — all operations are `static inline`.
 
 ```c
@@ -60,13 +60,12 @@ A fixed-capacity FIFO queue backed by a caller-provided buffer.
 - **Full-queue policy** — choose per queue how a push behaves when full:
   `NX_QUEUE_ON_FULL_REJECT` (reject the new element) or
   `NX_QUEUE_ON_FULL_OVERWRITE` (drop the oldest element and keep the newest).
-- **SPSC-friendly** — with one side only pushing and the other only popping, it is
-  safe without a lock on a single core as long as the two sides do not preempt each
-  other; because push and pop both read-modify-write the shared element count, a
-  producer that preempts a consumer (or vice versa) can lose an update. When they can
-  preempt each other, or for any other concurrent access, wrap push/pop in an `nx_lock`.
-- **Helpers** — `push` / `pop` / `peek` / `clear` / `size` / `capacity` /
-  `is_empty` / `is_full`.
+- **Cooperative SPSC use** — one producer and one consumer can share a queue on
+  a single core when neither can preempt the other. Both operations update the
+  shared element count, so preemptive or otherwise concurrent access must be
+  serialized by the caller, for example with `nx_lock`.
+- **Helpers** — `nx_queue_push`, `nx_queue_pop`, `nx_queue_peek`,
+  `nx_queue_clear`, and the size, capacity, empty, and full queries.
 
 ```c
 #include "nx_queue.h"
@@ -90,28 +89,25 @@ while (nx_queue_pop(&q, &v) == NX_QUEUE_OK) {
 
 ## nx_ringbuf — byte-oriented ring buffer
 
-A byte-stream FIFO backed by a caller-provided buffer. It stores a raw *byte
-stream*: transfers move a variable number of bytes and may be partial. That is
-the natural fit for serial I/O (UART RX/TX) and other streaming data.
+A byte-stream FIFO backed by a caller-provided buffer. Transfers operate on
+variable byte counts and may be partial, which makes the module well suited to
+serial I/O and other streaming data.
 
-- **Byte stream, partial transfers** — `write` / `read` / `peek` / `discard`
-  operate on byte counts and return how many bytes were actually moved; a write
-  that does not fully fit (or a read with fewer bytes available) transfers what
-  it can rather than failing. No overwrite of unread data.
+- **Byte stream with partial transfers** — `write`, `read`, `peek`, and
+  `discard` return the number of bytes actually moved. A request may complete
+  partially rather than fail outright, and writes never overwrite unread data.
 - **Fixed capacity** — capacity is set at init time and never grows; the whole
   buffer is usable (no reserved slot).
-- **DMA-friendly** — `peek_linear` exposes the largest physically contiguous
-  *readable* region and `poke_linear` the largest contiguous *writable* region,
-  so a DMA engine can read from or write to the ring buffer directly; commit a
-  direct fill with `nx_ringbuf_commit`, consume a direct read with
-  `nx_ringbuf_discard`. No bounce buffer needed.
-- **SPSC-friendly** — with one writer and one reader it is safe without a lock on a
-  single core as long as the two sides do not preempt each other; because write and
-  discard both read-modify-write the shared byte count, a producer that preempts a
-  consumer (or vice versa) can lose an update. When they can preempt each other, or for
-  any other concurrent access, wrap the operations in an `nx_lock` (see `nx_lock`). This
-  module introduces no locks.
-- **Helpers** — `size` / `capacity` / `free` / `is_empty` / `is_full` / `clear`.
+- **DMA-friendly access** — `nx_ringbuf_peek_linear` exposes the largest
+  contiguous readable region, while `nx_ringbuf_poke_linear` exposes the largest
+  contiguous writable region. After direct access, call `nx_ringbuf_discard` to
+  consume readable bytes or `nx_ringbuf_commit` to publish written bytes.
+- **Cooperative SPSC use** — one writer and one reader can share a ring buffer on
+  a single core when neither can preempt the other. Because both sides update the
+  shared byte count, the caller must serialize preemptive or otherwise concurrent
+  access. The module does not acquire a lock itself.
+- **Helpers** — queries report the current size, capacity, and free space, while
+  `nx_ringbuf_clear` resets the buffer to empty.
 
 ```c
 #include "nx_ringbuf.h"
@@ -138,36 +134,40 @@ if (src != NULL) {
 
 ## nx_tiered_mem_pool — tiered static memory pool
 
-A deterministic, fragmentation-free replacement for `malloc`/`free`, built from
-several "tiers" of equally sized blocks carved out of one caller-provided buffer.
+A fixed-capacity alternative to `malloc` and `free`. The pool divides one
+caller-provided arena into tiers of equal-size blocks and serves each request
+from the smallest suitable tier that has space.
 
-- **Bounded, predictable timing** — a request is rounded up to the smallest
-  large-enough tier and served from that tier's in-use bitmap. Free is O(1);
-  allocation scans a small bitmap bounded by the tier's block count.
-- **Zero per-block overhead** — blocks carry no header; the owning tier is found by
-  address range on free. Since blocks store no internal pointer, block sizes down
-  to a single alignment unit are usable.
-- **Built-in double-free detection** — freeing an already-free block returns
-  `NX_TIERED_ERR_DOUBLE_FREE` instead of corrupting the pool, and is O(1).
-- **Fragmentation-free** — every block within a tier is the same size.
+- **Bounded work** — allocation scans the configured tier table and, for a
+  suitable tier, at most that tier's bounded bitmap. Freeing first scans the
+  bounded tier table to locate the block, then updates its bitmap entry in
+  constant time.
+- **No in-band block headers** — ownership and allocation state are stored in
+  per-tier metadata and bitmaps, leaving every returned block entirely available
+  to the caller.
+- **Built-in validation** — an invalid pointer returns `NX_TIERED_ERR_INVALID`;
+  freeing an already-free block returns `NX_TIERED_ERR_DOUBLE_FREE` instead of
+  changing the pool state.
+- **No external fragmentation within a tier** — each tier contains fixed-size
+  blocks. Rounding a request up to a tier size can still introduce internal
+  fragmentation.
 - **Configurable fallback** — when the ideal tier is exhausted a request falls back
   to a larger tier; set `forbid_fallback` to serve only from the best-fit tier.
-- **Runtime-sized, one buffer** — tier list and block counts are configured at init,
-  not fixed at compile time; the tier table and per-tier bitmaps are carved from the
-  same caller buffer as the blocks, so a pool costs exactly what its config needs.
-  Init reports the exact bytes required, so oversize the buffer, run once, then shrink
-  to fit. The buffer needs no particular alignment.
-- **Built-in statistics** — per tier: block size, count, free count, and peak usage
-  (high-water mark), read by index.
-- **Optional locking** — a single-context user needs no lock; when alloc/free run
-  from several contexts, supply an `nx_lock` in the config and the pool wraps each of
-  them. `NULL` (the default) compiles to nothing. The module adds no locks of its own.
+- **Runtime-configured, single-arena layout** — the tier table, bitmaps, and block
+  storage all come from the supplied arena. Initialization reports the required
+  size after alignment; an unaligned arena may need up to
+  `_Alignof(max_align_t) - 1` additional bytes of leading padding.
+- **Built-in statistics** — statistics for each tier include its effective block
+  size, block count, free count, and peak usage, and can be queried by index.
+- **Optional locking** — when allocation and deallocation may run concurrently,
+  provide an `nx_lock` in the configuration. A `NULL` lock makes the critical-
+  section helpers no-ops.
 
 ```c
 #include "nx_tiered_mem_pool.h"
 
-/* no special alignment needed; oversize it and let init report the exact need */
-static uint8_t mem[32 * 8 + 128 * 4 + 128];
+/* Aligning the arena makes the reported required size sufficient as-is. */
+static _Alignas(max_align_t) uint8_t mem[32 * 8 + 128 * 4 + 256];
 
 static const nx_tiered_level_cfg_t tiers[] = {
     { 32, 8 },     /* 8 blocks of 32 bytes  */
@@ -184,7 +184,9 @@ nx_tiered_mem_pool_cfg_t cfg = {
 };
 
 size_t required = 0;
-nx_tiered_mem_pool_init(&pool, &cfg, &required);   /* required = exact bytes needed */
+if (nx_tiered_mem_pool_init(&pool, &cfg, &required) != NX_TIERED_OK) {
+    /* required reports the arena size needed for this tier configuration */
+}
 
 void *p = nx_tiered_mem_pool_alloc(&pool, 20);     /* served by the 32-byte tier */
 /* ... use p ... */
@@ -201,98 +203,115 @@ for (size_t i = 0; i < nx_tiered_mem_pool_tier_count(&pool); i++) {
 
 ## nx_ref_msg — reference-counted zero-copy messages
 
-A message-passing layer where messages are reference-counted blocks carved from a
-static memory pool: publishing a message increments its ref-count, consuming
-(delivery or explicit drop) decrements it, and the block is freed automatically
-when the ref-count hits zero. This eliminates both copying (one allocation at
-publish time, consumed by N readers in place) and free timing races (a reader
-does not need to know whether it holds the last reference — `drop` handles it).
+A zero-copy dispatch layer for messages allocated from `nx_tiered_mem_pool`.
+Each queue stores an `nx_ref_msg_t *`, so multiple consumers can share one
+payload. A reference count keeps the pooled block alive until the producer and
+all consumers have released their references.
 
-- **Publish once, consume many** — `publish` allocates a block from the pool and
-  sets the ref-count to 1; `deliver` returns a pointer to the caller without
-  copying and increments the ref-count by 1 for that delivery; when the reader
-  is done (or skips the message) it calls `drop`, which decrements and frees the
-  block only if the ref-count reaches zero. The producer can safely discard its
-  ref at any time, and the message stays live until the last consumer drops it.
-- **No external memory** — the refcount and size metadata live in a small header
-  that precedes the user data in the pool block; the block layout is
-  `header || user data`, and pointers handed to the user point *past* the
-  header, so `drop(msg)` works backward to find it.
-- **Type-safe messages** — the header records a `msg_type` (a user-defined
-  integer id) so the consumer can dispatch on message type without parsing the
-  payload; types are also used by `deliver` filters (deliver only messages of a
-  particular type to a particular queue) to route messages without waking every
-  consumer.
-- **Lossless dispatch** — `deliver` pushes the message to one or more queues
-  (ref-count incremented once per delivery), each queue draining into a
-  different consumer. If a queue is full, `deliver` returns an error and does
-  not drop the message; the caller sees the full queue and decides the policy —
-  retry, discard, or apply backpressure.
-- **Pool exhaustion protection** — callers should size the pool and the queues so
-  the total in-flight message memory never exceeds the pool; ref-counting means
-  the pool self-drains as consumers finish with their copies, and when the pool
-  is empty `publish` returns NULL, giving the publisher an explicit backpressure
-  signal.
+- **One allocation per message** — `nx_ref_msg_alloc` allocates the header and
+  payload together and returns the producer's initial reference. The payload is
+  available through `nx_ref_msg_data`, and `nx_ref_msg_len` reports its current
+  length. `nx_ref_msg_shrink` can reduce that reported length without reallocating
+  the block.
+- **Explicit ownership** — every successful `nx_ref_msg_publish` adds one
+  queue-owned reference. After publishing, the producer releases its initial
+  reference. A consumer pops the pointer, reads the shared payload, and releases
+  its reference when finished; the final release returns the block to the pool.
+  Fill the payload before publishing it and do not access a message after
+  releasing its reference.
+- **Reference-safe queues** — `nx_ref_msg_queue_init` fixes the queue element size
+  to `sizeof(nx_ref_msg_t *)` and uses `NX_QUEUE_ON_FULL_REJECT`. An overwrite
+  policy would discard a pointer without releasing its reference. For the same
+  reason, do not discard an entry with `nx_queue_pop(q, NULL)`, or clear or
+  reinitialize a non-empty message queue. Pop and release every queued message
+  first.
+- **Best-effort multi-queue publish** — `nx_ref_msg_publish_multi` accepts a
+  NULL-terminated array of queue pointers and continues after a full queue. It
+  returns `NX_REF_MSG_OK` when every queue accepted the message,
+  `NX_REF_MSG_PARTIAL` when only some did, and `NX_REF_MSG_ERR_FULL` when a
+  non-empty list delivered to none. Optional outputs report the delivery count
+  and the first failed queue index.
+- **Caller-managed concurrency** — the reference count and queues are not
+  atomic. If publishing, consuming, or releasing can occur concurrently, the
+  caller must serialize both the reference-count and queue operations. A lock
+  configured on the underlying memory pool protects only pool allocation and
+  deallocation.
 
 ```c
 #include "nx_ref_msg.h"
+#include <string.h>
 
-/* pool: 8 × 64-byte blocks */
-uint8_t       pool_data[8 * 64];
-uint32_t      pool_bitmap[1];
-nx_queue_t    q;
-int           q_storage[4];
+/* One pool tier with eight 64-byte blocks, plus metadata headroom. */
+static _Alignas(max_align_t) uint8_t arena[8 * 64 + 256];
+static const nx_tiered_level_cfg_t tiers[] = { { 64, 8 } };
 
-nx_ref_msg_sys_t sys;
-nx_tiered_mem_pool_tier_def_t tier = {64, 8};
-nx_ref_msg_sys_init(&sys, pool_data, sizeof(pool_data), &tier, 1, pool_bitmap);
-
-nx_queue_init(&q, q_storage, sizeof(void*), 4, NX_QUEUE_ON_FULL_REJECT);
-
-/* publish a message of type 1 */
-void *msg = nx_ref_msg_publish(&sys, 1, "hello", 5);
-if (msg) {
-    nx_ref_msg_deliver(&sys, msg, &q);   /* queue now holds a ref */
-    nx_ref_msg_drop(&sys, msg);          /* publisher drops its ref */
+nx_tiered_mem_pool_t pool;
+nx_tiered_mem_pool_cfg_t pool_cfg = {
+    .memory      = arena,
+    .memory_size = sizeof(arena),
+    .tiers       = tiers,
+    .tier_count  = 1u,
+};
+if (nx_tiered_mem_pool_init(&pool, &pool_cfg, NULL) != NX_TIERED_OK) {
+    /* handle invalid configuration or insufficient arena space */
 }
 
-/* consumer */
-void *rmsg;
-if (nx_queue_pop(&q, &rmsg) == NX_QUEUE_OK) {
-    /* cast to the actual message struct, check msg_type, etc. */
-    nx_ref_msg_drop(&sys, rmsg);         /* done; block freed if refcount=0 */
+nx_ref_msg_t *queue_storage[4];
+nx_queue_t queue;
+nx_ref_msg_queue_init(&queue, queue_storage, 4u);
+
+/* Producer: allocate, fill, publish, and release the producer reference. */
+nx_ref_msg_t *msg = nx_ref_msg_alloc(&pool, 5u);
+if (msg != NULL) {
+    memcpy(nx_ref_msg_data(msg), "hello", 5u);
+    nx_ref_msg_publish(msg, &queue);    /* success adds a queue reference */
+    nx_ref_msg_release(msg);            /* release the producer reference */
+}
+
+/* Consumer: the popped pointer owns one reference. */
+nx_ref_msg_t *received = NULL;
+if (nx_queue_pop(&queue, &received) == NX_QUEUE_OK) {
+    /* consume(nx_ref_msg_data(received), nx_ref_msg_len(received)); */
+    nx_ref_msg_release(received);
 }
 ```
 
 
 ## nx_timer — software timer manager
 
-A deterministic, tick-driven timer scheduler where every timer is caller-owned
-and placed in an intrusive red-black tree sorted by expiry. On each tick,
-`nx_timer_tick` walks the tree and fires every expired timer's callback; a
-one-shot is removed automatically, a periodic timer is rescheduled for the next
-interval. Zero dynamic memory.
+A caller-driven software timer manager built on an intrusive list. The
+application periodically passes a monotonically increasing tick value to
+`nx_timer_mgr_process`, which scans the active timers and invokes callbacks for
+those that have expired. The module uses no dynamic memory or hardware APIs.
 
-- **Intrusive, deterministic** — timers embed the `nx_timer_t` struct and link
-  into a red-black tree (`nx_list`-based), so there is no hidden allocation and
-  the cost of add/remove/tick is bounded by tree depth (O(log N) rebalance when
-  adding, O(1) to check the earliest, O(K) to fire K expired timers where K is
-  usually small).
-- **Tick-driven** — time is an abstract monotonic counter (ticks); the caller
-  advances it by calling `nx_timer_tick(mgr, now)`. No threads, no OS hooks, no
-  platform coupling.
-- **One-shot and periodic** — configured per timer at start time; one-shot fires
-  once and is removed, periodic reschedules for `interval` ticks in the future.
-- **Safe manipulation from callbacks** — `nx_timer_tick` iterates in a way that
-  tolerates a callback starting or stopping other timers (including itself).
-- **Optional coalescing** — timers within the same tick fire in tree order (which
-  is add order when they have the same deadline); callers that need tighter
-  control can sort by a secondary key in the `nx_timer_t` struct.
+- **Caller-defined tick unit** — delays and periods use the unit of the supplied
+  counter, whether that is milliseconds, RTOS ticks, or microseconds.
+- **Explicit lifecycle** — initialize the manager with `nx_timer_mgr_init`, each
+  timer with `nx_timer_init`, and then arm it with `nx_timer_start`. Starting an
+  active timer restarts it; `nx_timer_stop` is safe for an inactive timer.
+- **One-shot and periodic operation** — `period == 0` selects a one-shot timer.
+  A nonzero period reloads from the previous deadline to preserve phase. One
+  call to `nx_timer_mgr_process` invokes a given periodic timer at most once, so
+  an overdue timer catches up over subsequent calls rather than in a tight loop.
+- **Predictable list scan** — start and stop update the intrusive list in constant
+  time. Processing scans all active timers, so its cost is O(N) plus callback
+  work. Timers are visited in list order, not sorted by deadline.
+- **Start time and wraparound** — a new deadline is based on the manager's most
+  recent processed tick (`last_tick + delay`). The signed-difference expiry test
+  handles `uint32_t` wraparound when individual delays and periods do not exceed
+  `INT32_MAX` ticks and processing is not paused across half of the counter's
+  range.
+- **Synchronous callbacks** — callbacks run inside `nx_timer_mgr_process` and
+  therefore in its calling context. The module does not lock; serialize
+  `start`, `stop`, and `process` when different contexts can call them. Avoid
+  changing other timers from a callback because doing so can alter the current
+  list traversal.
 
 ```c
 #include "nx_timer.h"
 
 static void on_timeout(nx_timer_t *t, void *arg) {
+    (void)t;
     printf("Timer %s expired\n", (const char*)arg);
 }
 
@@ -300,15 +319,15 @@ nx_timer_mgr_t mgr;
 nx_timer_mgr_init(&mgr);
 
 nx_timer_t t1;
-/* one-shot, fires at tick 100 */
-nx_timer_start(&mgr, &t1, 100, 0, on_timeout, "A");
+nx_timer_init(&t1, on_timeout, "A");
+nx_timer_start(&mgr, &t1, 100, 0);  /* one-shot at tick 100 */
 
 nx_timer_t t2;
-/* periodic, first fire at tick 50, then every 20 ticks */
-nx_timer_start(&mgr, &t2, 50, 20, on_timeout, "B");
+nx_timer_init(&t2, on_timeout, "B");
+nx_timer_start(&mgr, &t2, 50, 20);  /* first at 50, then every 20 ticks */
 
 for (uint32_t now = 0; now < 200; now++) {
-    nx_timer_tick(&mgr, now);   /* fires callbacks as timers expire */
+    nx_timer_mgr_process(&mgr, now);
 }
 ```
 
@@ -317,32 +336,34 @@ for (uint32_t now = 0; now < 200; now++) {
 
 A header-only set of macros that let an ordinary C function suspend in the
 middle and resume there on the next call, built on Duff's device and `__LINE__`.
-That turns a sequence like "send, wait for the reply, retry" into straight-line
-code, without an RTOS and without a stack
-per task.
+This turns workflows such as "send, wait for a reply, then retry" into
+straight-line code without an RTOS or a per-task stack.
 
-- **Stackless** — nothing is saved across a suspend point except one line
-  number. The whole coroutine state is a caller-owned struct of one to three
-  words: no per-coroutine stack, no context switch, no allocation.
+- **Stackless** — the coroutine state is a small caller-owned structure whose
+  resume point is a source line number. There is no per-coroutine stack, context
+  switch, or allocation.
 - **Never blocks** — a coroutine returns to its caller at every suspend point.
   There is no scheduler in the module; the application's main loop is the
   scheduler, calling each coroutine again and again.
-- **Suspend on time or on a condition** — `NX_CORO_YIELD` gives up a turn,
-  `NX_CORO_WAIT_UNTIL` / `NX_CORO_WAIT_WHILE` suspend on a predicate, and
-  `NX_CORO_SLEEP` / `NX_CORO_TIMEDSET` / `NX_CORO_TIMEDWAIT` suspend on a
+- **Suspend for a delay or until a condition is met** — `NX_CORO_YIELD` gives up
+  a turn, `NX_CORO_WAIT_UNTIL` and `NX_CORO_WAIT_WHILE` suspend on a predicate,
+  and `NX_CORO_SLEEP`, `NX_CORO_TIMEDSET`, and `NX_CORO_TIMEDWAIT` use a
   caller-supplied tick source — a `uint32_t (*)(void)` monotonic counter, with
   wrap-around handled by unsigned differences.
 - **Two state types** — `nx_coro_stack_t` for yield and condition waits;
   `nx_coro_stack_plus_t`, initialized with `NX_CORO_INIT_PLUS`, adds the tick
   source the time-based macros need.
 - **Composable** — `NX_CORO_SCHEDULE` reports whether a coroutine is still
-  running, so a parent runs a child to completion by waiting on it.
+  running, allowing a parent coroutine to run a child to completion.
 
-Restrictions follow from the `switch`-based implementation: locals do not
-survive a suspend point (persistent state goes in the struct), you cannot write
-a `switch` of your own between `BEGIN` and `END`, there is at most one suspend
-point per source line, suspend points must be lexically inside the same
-function, and code placed before `NX_CORO_BEGIN` runs on every call.
+The `switch`-based implementation has several restrictions:
+
+- Local variables do not survive a suspend point; keep persistent state in the
+  caller-owned state structure.
+- Do not place another `switch` between `NX_CORO_BEGIN` and `NX_CORO_END`.
+- Put at most one suspend point on each source line, and keep every suspend point
+  lexically within the same function.
+- Code before `NX_CORO_BEGIN` runs on every call.
 
 ```c
 #include "nx_coro.h"
@@ -374,82 +395,110 @@ for (;;) {
 ```
 
 > **Note:** a resume point expands to `lc = __LINE__; case __LINE__:`, which
-> GCC/Clang read as a case falling through for want of a `break`. The switch
-> only ever jumps to those labels, so that fallthrough cannot happen — build
-> with `-Wno-implicit-fallthrough` if you use `-Wextra`.
+> GCC/Clang read as a case falling through because no `break` precedes the
+> generated `case` label. This fallthrough is intentional: execution reaches the
+> label directly on the first pass and the outer `switch` jumps back to it on a
+> later call. Use `-Wno-implicit-fallthrough` if you build with `-Wextra`.
 
 
 ## nx_lock — pluggable critical-section abstraction
 
-A minimal portability shim: the core modules that need mutual exclusion
-(`nx_queue`, `nx_ringbuf`) call `nx_lock_acquire` / `nx_lock_release`, which
-default to no-ops (safe for bare-metal single-core). On platforms that need real
-locks, define the hook macros to your platform's primitives (CMSIS-RTOS mutex,
-FreeRTOS critical section, pthread mutex, etc.) before including the headers.
+A small adapter for platform-specific critical sections. An `nx_lock_t` stores
+matching `enter` and `exit` callbacks plus an optional context pointer. Code that
+needs synchronization calls `nx_lock_enter`, performs the protected operation,
+and passes the returned state to `nx_lock_exit`.
 
-- **Defaults to no-op** — if you don't define the hooks, `nx_lock_acquire` and
-  `nx_lock_release` expand to nothing, so single-threaded or SPSC usage has zero
-  overhead.
-- **Define once, used everywhere** — the lock object (`nx_lock_t`) and the
-  acquire/release macros are in one header; every module that needs a lock
-  includes it and uses the same definition.
-- **Caller controls the policy** — critical sections, mutexes, spinlocks,
-  recursive locks — the library does not pick; it only brackets the region. You
-  supply the actual locking primitives by defining the three hooks:
-  `NX_LOCK_DEFINE`, `NX_LOCK_ACQUIRE`, `NX_LOCK_RELEASE`.
+- **Caller-selected primitive** — callbacks can disable interrupts, acquire a
+  mutex, or enter another platform-specific critical section. The adapter does
+  not create a lock or impose a scheduling policy.
+- **Saved-state pairing** — `enter` returns an implementation-defined
+  `uintptr_t`, such as the previous interrupt-enable state. Pass that value
+  unchanged to the matching `exit` call so the platform implementation can
+  restore its prior state. Supply `enter` and `exit` as a valid pair.
+- **Header-only forwarding** — `nx_lock_enter` and `nx_lock_exit` validate the
+  lock pointer and invoke the configured callbacks. Passing a `NULL` lock makes
+  both helpers no-ops, with `nx_lock_enter` returning zero.
+- **Explicit or configured use** — `nx_tiered_mem_pool`, `nx_log`, and
+  `nx_event_flags` accept a configured lock. `nx_queue` and `nx_ringbuf` do not;
+  callers must explicitly wrap their operations when synchronization is needed.
+  `nx_ref_msg` reference counts and `nx_timer` operations likewise require
+  external serialization when shared concurrently.
 
 ```c
 #include "nx_lock.h"
 #include "nx_queue.h"
 
-/* example: map to FreeRTOS critical sections (disable interrupts) */
-#define NX_LOCK_DEFINE(name)      /* empty; no storage needed */
-#define NX_LOCK_ACQUIRE(lock)     taskENTER_CRITICAL()
-#define NX_LOCK_RELEASE(lock)     taskEXIT_CRITICAL()
+/* Example platform hooks: save, disable, and later restore interrupts. */
+static uintptr_t irq_enter(void *ctx) {
+    (void)ctx;
+    uintptr_t state = platform_irq_save();
+    platform_irq_disable();
+    return state;
+}
 
-/* now nx_queue, nx_ringbuf, etc. use the above hooks when they lock */
-int        storage[4];
+static void irq_exit(void *ctx, uintptr_t state) {
+    (void)ctx;
+    platform_irq_restore(state);
+}
+
+static const nx_lock_t queue_lock = {
+    .enter = irq_enter,
+    .exit  = irq_exit,
+    .ctx   = NULL,
+};
+
+int storage[4];
+int item = 42;
 nx_queue_t q;
-nx_queue_init(&q, storage, sizeof(int), 4, NX_QUEUE_ON_FULL_REJECT);
-/* push/pop internally call NX_LOCK_ACQUIRE / RELEASE */
+nx_queue_init(&q, storage, sizeof(storage[0]), 4u, NX_QUEUE_ON_FULL_REJECT);
+
+uintptr_t state = nx_lock_enter(&queue_lock);
+nx_queue_push(&q, &item);
+nx_lock_exit(&queue_lock, state);
 ```
 
-## nx_log — static asynchronous plain-text logging
+Keep the protected region short. Disabling interrupts protects only the current
+core; use a primitive with the required cross-core semantics on a multicore
+target.
 
-A logging facility that formats a message with `vsnprintf` into a caller-owned
-ring buffer, then drains that buffer to an injected write sink from a single
-`nx_log_process` call on the main loop. Formatting is decoupled from the slow,
-possibly blocking sink, so a producer — even one in an interrupt — never waits on
-I/O. No dynamic memory.
+## nx_log — asynchronous logging with caller-owned storage
+
+A logging facility that formats messages into a caller-owned ring buffer. The
+main loop later calls `nx_log_process` to drain buffered bytes to an injected
+sink. Formatting remains on the producer's path, but slow or blocking sink I/O
+runs only from the consumer path. The module uses no dynamic memory.
 
 - **Plain text** — messages are formatted with `vsnprintf` and carry a
-  `[level] [tick] file:line: ` prefix, so the output is readable directly on a
+  `[level-tag] [tick] file:line: ` prefix, so the output is readable directly on a
   serial terminal with no decoding tool. The tick timestamp comes from an
   injected `get_tick` source and is omitted when that callback is NULL.
 - **Asynchronous delivery** — a formatted line is enqueued into a byte ring
-  buffer; `nx_log_process` later hands the sink its contiguous segments via the
-  ring buffer's linear helpers. Producers are decoupled from the sink's latency,
-  and the sink runs in one place (the main loop) rather than in every call site.
-- **Optional sink, or pull from memory** — the `write` sink may be NULL: the log
-  then just accumulates in the buffer, and the caller pulls it out on demand with
-  `nx_log_read` (a debug shell, a diagnostic command) or inspects the buffer
-  directly in a debugger. That fits a device with no live output interface.
+  buffer. `nx_log_process` later copies buffered chunks under the configured
+  lock and invokes the sink after releasing it. Producers are decoupled from the
+  sink's latency, and the sink runs in one place rather than at every call site.
+- **Push or pull consumption** — the `write` sink may be NULL. In that mode,
+  logs remain buffered until the caller retrieves them with `nx_log_read`, for
+  example through a debug shell or diagnostic command.
 - **Zero allocation, caller-owned buffer** — the ring-buffer storage is supplied
-  in the config (`buffer` / `buffer_size`); the module allocates nothing.
+  through the `buffer` and `buffer_size` configuration fields; the module
+  allocates nothing.
 - **Two-stage level filtering** — `NX_LOG_COMPILE_LEVEL` strips call sites more
-  verbose than it at compile time, so their format strings never reach the image;
-  a runtime `level` filters what remains and can change on the fly with
-  `nx_log_set_level`.
+  verbose than the configured compile-time threshold, allowing the compiler to
+  remove their formatting work. The runtime `level` filters what remains and
+  can be changed with `nx_log_set_level`.
 - **Whole-line-or-nothing, with a full-buffer policy** — a line is never written
-  half-way. When the buffer cannot hold a new line, `on_full` decides:
+  halfway. Lines longer than `NX_LOG_LINE_MAX` are truncated before enqueueing.
+  When the buffer cannot hold a new line, `on_full` decides:
   `NX_LOG_ON_FULL_OVERWRITE_OLD` (the default) evicts the oldest whole lines to
-  make room, so the freshest log always survives — the fit for inspecting "what
-  happened just before the crash" in a debugger; `NX_LOG_ON_FULL_DROP_NEW` keeps
-  the oldest and drops the new line instead. Either way `nx_log_dropped` counts
-  the lines lost.
-- **Optional locking** — a single-producer/single-consumer setup needs no lock;
-  when several contexts log concurrently the caller supplies an `nx_lock` in the
-  config and the module wraps only the O(1) enqueue step in it.
+  preserve the newest lines that fit; `NX_LOG_ON_FULL_DROP_NEW` preserves the
+  buffered lines and drops the new one. `nx_log_dropped` counts every discarded
+  or evicted line.
+- **Optional locking** — cooperative, non-preempting use needs no lock. For
+  concurrent producers or a producer that can preempt the consumer, configure
+  an `nx_lock`. It protects ring-buffer updates and whole-line eviction;
+  formatting and sink I/O remain outside the critical section. The supplied
+  callbacks and C library must themselves be suitable for any interrupt context
+  from which logging is performed.
 
 ```c
 #include "nx_log.h"
@@ -470,12 +519,12 @@ nx_log_cfg_t cfg = {
     .io_ctx      = &uart0,
     .get_tick    = board_millis,   /* NULL to omit the timestamp */
     .level       = NX_LOG_LEVEL_INFO,
-    .lock        = NULL,           /* set for multi-producer logging */
+    .lock        = NULL,           /* configure when access can overlap */
 };
 nx_log_init(&log, &cfg);
 
 NX_LOGI(&log, "link up, addr=%u", addr);   /* enqueued */
-NX_LOGD(&log, "raw=%02x", byte);           /* below INFO -> filtered out */
+NX_LOGD(&log, "raw=%02x", byte);           /* more verbose than INFO: filtered */
 
 for (;;) {
     nx_log_process(&log);   /* drain queued bytes to the sink */
@@ -483,46 +532,49 @@ for (;;) {
 }
 ```
 
-> **Note:** logging is a two-step affair — a `NX_LOGx` call only *formats and
+> **Note:** logging is a two-stage process. A `NX_LOGx` call only *formats and
 > enqueues*; the bytes leave the buffer only when `nx_log_process` runs on the
 > main loop (or `nx_log_read` pulls them out when there is no sink). Size `buffer`
 > for the burst you expect between drains: once it is full, `on_full` decides
 > whether the new line is dropped (and counted by `nx_log_dropped`) or the oldest
-> lines are evicted — either way a line is never written half-way. Set `lock` only
-> when more than one context logs into the same handle.
+> lines are evicted — either way a line is never partially enqueued. Configure
+> a lock whenever access to the same handle can overlap.
 
 ## nx_event_flags — polled event flags for cooperative loops
 
-A header-only event-flags module: 32 bits you can set, clear, test, and
-atomically take. Each bit is one event. Use this for lightweight signaling between
-ISRs and the main loop, or between modules that need to broadcast readiness /
-coordinate shutdown. Non-blocking: you poll the flags when you run, so they fit
-naturally into a cooperative loop without a scheduler.
+A header-only event-flags module with 32 caller-defined bits. Code can set,
+clear, test, or consume selected flags without a scheduler or blocking wait. It
+is intended for lightweight signaling in cooperative loops and, when configured
+with a suitable lock, between an ISR and the main loop.
 
 - **32 independent bits** — each bit is one event (user-defined meaning).
-- **Set / clear / test / take** — `set` raises flags, `clear` lowers them, `test`
-  checks (non-consuming), `take` does an atomic test-and-clear. Use `test` for
-  broadcast events (every module sees it), `take` for one-shot work items (one
-  consumer gets it).
+- **Set, clear, test, and take** — `set` raises flags, `clear` lowers them, and
+  `test` checks without consuming. `take` tests and clears the selected mask as
+  one protected operation when a lock is configured. Use `test` for broadcast
+  state and `take` for one-shot work.
 - **Barrier primitive: test_all** — returns true only when every bit in the mask
-  is set. Use this for acknowledgment barriers (wait for three modules to each set
-  their own ack bit) or multi-part readiness checks.
+  is set. Use this for acknowledgment barriers or multipart readiness checks.
 - **Coalescing** — setting the same flag multiple times before a take still reads
-  as one raised bit. The flag tells you "at least one X happened," not a count.
-- **Optional ISR safety** — pass an `nx_lock` at init to make set/clear/take
-  atomic against interrupt preemption. Read-only operations (`test`, `test_all`,
-  `get`) need no lock (single 32-bit read). Omit the lock when all accesses are
-  from one context.
-- **Zero allocation, header-only** — the instance is 8 bytes (one `uint32_t` plus
-  a lock pointer); all operations are `static inline`.
+  as one raised bit. A flag records that an event happened at least once; it is
+  not a counter.
+- **Optional synchronization** — pass a valid `nx_lock` at initialization to
+  protect `set`, `clear`, and `take` from concurrent updates. `test`, `test_all`,
+  and `get` perform an unlocked 32-bit read; concurrent readers therefore depend
+  on the target providing a coherent 32-bit read, or must be serialized by the
+  caller.
+- **Zero allocation, header-only** — the instance contains one `uint32_t` flag
+  word and one lock pointer; all operations are `static inline`.
 
 ```c
-#include "src/core/nx_event_flags.h"
+#include "nx_event_flags.h"
 
 /* Scenario: ISR sets flags, main loop takes them */
 #define RX_READY   (1u << 0)
 #define TX_DONE    (1u << 1)
 #define TIMER_TICK (1u << 2)
+
+/* The platform supplies an interrupt-safe enter/exit callback pair. */
+extern const nx_lock_t g_isr_lock;
 
 nx_event_flags_t g_events;
 nx_event_flags_init(&g_events, &g_isr_lock);   /* with lock for ISR safety */
@@ -545,9 +597,9 @@ for (;;) {
 ```
 
 > **Note:** `test` / `test_all` are read-only and leave the flags raised — use
-> these for broadcast events multiple modules need to see. `take` is atomic
-> test-and-clear (one consumer gets it, flag is cleared). Multiple `set` calls
-> before a `take` coalesce into one raised bit — the flag says "at least once,"
-> not a count. Pass a lock at init only when an ISR and the main loop share the
-> instance; single-context use needs no lock.
+> these for broadcast events that multiple modules need to observe. `take`
+> performs a test-and-clear under the configured lock, so one consumer handles
+> the coalesced event. Multiple `set` calls before a `take` still produce one
+> raised bit. Configure a lock whenever updates can overlap; single-context use
+> needs none.
 
