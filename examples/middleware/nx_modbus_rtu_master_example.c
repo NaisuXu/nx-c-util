@@ -723,13 +723,21 @@ int nx_modbus_rtu_master_example_run(void)
         printf("  OK: read/write-regs frame built, answered, and its limits enforced\n");
     }
 
-    /* ---- 12. init rejects a configuration that cannot work ---- */
+    /* ---- 12. init releases the bus and rejects a configuration that cannot work ---- */
     {
         nx_modbus_rtu_master_t bad;
         nx_modbus_rtu_master_cfg_t c = cfg;
 
-        c = cfg; c.pool = NULL;
+        c.dir_tx = mock_dir_tx;
+        g_de_asserted = true;
+        assert(nx_modbus_rtu_master_init(&bad, &c));
+        assert(!g_de_asserted);                    /* successful init starts in RX mode */
+        nx_modbus_rtu_master_deinit(&bad);
+
+        c = cfg; c.dir_tx = mock_dir_tx; c.pool = NULL;
+        g_de_asserted = true;
         assert(!nx_modbus_rtu_master_init(&bad, &c));
+        assert(g_de_asserted);                     /* failed init has no GPIO side effect */
         c = cfg; c.request_queue = NULL;
         assert(!nx_modbus_rtu_master_init(&bad, &c));
         c = cfg; c.read = NULL;
@@ -747,7 +755,7 @@ int nx_modbus_rtu_master_example_run(void)
         c = cfg; c.subs = bcast; c.subs_count = 1u;
         assert(!nx_modbus_rtu_master_init(&bad, &c));
 
-        printf("  OK: init refused every unworkable configuration\n");
+        printf("  OK: init released the bus and refused every unworkable configuration\n");
     }
 
     /* ---- 13. a frame that arrives one byte per iteration is still assembled ----

@@ -457,9 +457,17 @@ int nx_modbus_rtu_slave_example_run(void)
      * have drawn a response. The exact-length match above proves neither happened. */
     printf("  OK: the broadcast frame was dropped silently (accept_broadcast = false)\n");
 
-    /* ---- a subscription without a queue is refused at init ----
-     * It would own an address range and then swallow every request in it. */
+    /* ---- init releases the bus; a subscription without a queue is refused ----
+     * The bad subscription would own an address range and then swallow every request. */
     {
+        nx_modbus_rtu_slave_t     idle;
+        nx_modbus_rtu_slave_cfg_t idle_cfg = cfg;
+        idle_cfg.dir_tx = mock_dir_tx;
+        g_de_asserted = true;
+        assert(nx_modbus_rtu_slave_init(&idle, &idle_cfg));
+        assert(!g_de_asserted);                    /* successful init starts in RX mode */
+        nx_modbus_rtu_slave_deinit(&idle);
+
         const nx_modbus_rtu_slave_sub_t bad[] = {
             { NX_MODBUS_FC_READ_HOLDING_REGS, 0x0000, 0x000F, NULL },
         };
@@ -467,8 +475,11 @@ int nx_modbus_rtu_slave_example_run(void)
         nx_modbus_rtu_slave_cfg_t c2 = cfg;
         c2.subs       = bad;
         c2.subs_count = 1;
+        c2.dir_tx     = mock_dir_tx;
+        g_de_asserted = true;
         assert(!nx_modbus_rtu_slave_init(&s2, &c2));
-        printf("  OK: init refuses a subscription with a NULL queue\n");
+        assert(g_de_asserted);                     /* failed init has no GPIO side effect */
+        printf("  OK: init releases the bus and refuses a subscription with a NULL queue\n");
     }
 
     /* ---- every owner's queue full -> 0x06, not silence ----

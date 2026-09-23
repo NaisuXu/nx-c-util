@@ -173,6 +173,8 @@ typedef struct {
  * Validates the configuration and copies it in. The RX buffer must be able to hold at
  * least the shortest response plus one byte of slack for overflow detection
  * (>= sizeof(nx_modbus_rtu_rsp_exc_t) + 1).
+ * On success, @c dir_tx is called with @c false, when supplied, so the bus starts
+ * released in receive mode.
  *
  * Every subscription must carry a @c queue: one without it would own a slave address
  * and then swallow every response from it, so it is rejected here rather than at

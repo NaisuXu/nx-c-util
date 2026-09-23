@@ -426,6 +426,10 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
         s->run.gap_us = 0u;
     }
 
+    if (s->cfg.dir_tx != NULL) {
+        s->cfg.dir_tx(s->cfg.dir_ctx, false);   /* start with the bus released */
+    }
+
     return true;
 }
 

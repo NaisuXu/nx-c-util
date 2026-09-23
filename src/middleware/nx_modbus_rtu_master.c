@@ -303,6 +303,10 @@ bool nx_modbus_rtu_master_init(nx_modbus_rtu_master_t *m, const nx_modbus_rtu_ma
         m->run.gap_us = 0u;
     }
 
+    if (m->cfg.dir_tx != NULL) {
+        m->cfg.dir_tx(m->cfg.dir_ctx, false);   /* start with the bus released */
+    }
+
     return true;
 }
 
