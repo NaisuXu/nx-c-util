@@ -254,8 +254,9 @@ main loop to advance transmission and reception.
   exception, 8 for a write confirmation, `3 + byte_count + 2` for a read), so RX needs no
   inter-character (T3.5) timer — robust on a busy bus where arrival timing cannot be
   trusted. A partial frame is held across calls and dispatched only once complete. Resync
-  after an unsupported code or a bad CRC drops one byte and retries. On TX a 3.5-character
-  gap (derived from `baud_rate`) follows each frame.
+  after an unsupported code or a bad CRC drops one byte and retries. Before each TX, the
+  bus must have remained silent for a 3.5-character gap derived from `baud_rate`; received
+  bytes or a completed transmission restart that gap.
 - **One step per call** — each `process()` advances the transmit path by a single state, so
   no call chains several frames onto the wire. With `is_busy` supplied, a frame in flight
   blocks both the next `write()` and the release of the direction pin, which is what keeps
@@ -282,7 +283,7 @@ const nx_modbus_rtu_master_sub_t subs[] = {
 
 nx_modbus_rtu_master_t     master;
 nx_modbus_rtu_master_cfg_t cfg = {
-    .baud_rate     = 115200u,        /* derives the 3.5-char TX gap */
+    .baud_rate     = 115200u,        /* derives the 3.5-char pre-TX gap */
     .pool          = &pool,          /* tiered pool for messages */
     .rx_buf        = rx_buf,
     .rx_size       = sizeof(rx_buf),

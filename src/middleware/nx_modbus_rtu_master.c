@@ -6,7 +6,7 @@
  *   - master_rx: pull bytes, slice length-known responses, check CRC, then dispatch
  *     each frame to the subscribers that own the address it came from.
  *   - master_tx: a small state machine that drains the shared request queue, one frame
- *     at a time, honoring the 3.5-character inter-frame gap.
+ *     at a time, only after 3.5 character times of observed bus silence.
  */
 #include "nx_modbus_rtu_master.h"
 
@@ -20,9 +20,8 @@
 
 /** TX state machine states. */
 enum {
-    TX_IDLE = 0,   /**< Nothing in flight; may start the next queued frame */
-    TX_SENDING,    /**< A frame is on the wire; waiting for the interface to go idle */
-    TX_GAP         /**< Frame sent; waiting out the inter-frame silence */
+    TX_IDLE = 0,   /**< Nothing in flight; may start after sufficient bus silence */
+    TX_SENDING     /**< A frame is on the wire; waiting for the interface to go idle */
 };
 
 /* ------------------------------------------------------------------ */
@@ -136,6 +135,11 @@ static void master_rx(nx_modbus_rtu_master_t *m)
         size_t got = m->cfg.read(m->cfg.io_ctx,
                                  m->cfg.rx_buf + m->run.rx_len,
                                  m->cfg.rx_size - m->run.rx_len);
+        if (got > 0u) {
+            if (m->cfg.get_us != NULL && m->run.gap_us != 0u) {
+                m->run.last_bus_activity_us = m->cfg.get_us();
+            }
+        }
         m->run.rx_len += got;
     }
 
@@ -201,6 +205,10 @@ static void master_tx(nx_modbus_rtu_master_t *m)
         if (m->cfg.is_busy != NULL && m->cfg.is_busy(m->cfg.io_ctx)) {
             break;
         }
+        if (m->cfg.get_us != NULL && m->run.gap_us != 0u &&
+            (uint32_t)(m->cfg.get_us() - m->run.last_bus_activity_us) < m->run.gap_us) {
+            break;
+        }
         nx_ref_msg_t *msg = NULL;
         if (nx_queue_pop(m->cfg.request_queue, &msg) != NX_QUEUE_OK || msg == NULL) {
             break;
@@ -221,32 +229,34 @@ static void master_tx(nx_modbus_rtu_master_t *m)
             m->run.tx_state = TX_IDLE;
             break;
         }
-        m->run.tx_state = TX_SENDING;
+        if (m->cfg.is_busy == NULL) {
+            /* A blocking write returns only after the last stop bit left the wire. */
+            if (m->cfg.dir_tx != NULL) {
+                m->cfg.dir_tx(m->cfg.dir_ctx, false);
+            }
+            nx_ref_msg_release(m->run.tx_cur);
+            m->run.tx_cur   = NULL;
+            m->run.tx_state = TX_IDLE;
+            if (m->cfg.get_us != NULL && m->run.gap_us != 0u) {
+                m->run.last_bus_activity_us = m->cfg.get_us();
+            }
+        } else {
+            m->run.tx_state = TX_SENDING;
+        }
         break;
     }
 
     case TX_SENDING:
-        /* A NULL is_busy means write() was blocking: treat as already done. */
-        if (m->cfg.is_busy == NULL || !m->cfg.is_busy(m->cfg.io_ctx)) {
+        if (!m->cfg.is_busy(m->cfg.io_ctx)) {
             if (m->cfg.dir_tx != NULL) {
                 m->cfg.dir_tx(m->cfg.dir_ctx, false);  /* release the bus */
             }
             nx_ref_msg_release(m->run.tx_cur);
-            m->run.tx_cur = NULL;
-            /* Enter the inter-frame gap only if we have a clock and a gap to wait. */
-            if (m->cfg.get_us != NULL && m->run.gap_us != 0u) {
-                m->run.gap_start_us = m->cfg.get_us();
-                m->run.tx_state     = TX_GAP;
-            } else {
-                m->run.tx_state = TX_IDLE;
-            }
-        }
-        break;
-
-    case TX_GAP:
-        /* Only reached when get_us != NULL (guarded above), so the call is safe. */
-        if ((uint32_t)(m->cfg.get_us() - m->run.gap_start_us) >= m->run.gap_us) {
+            m->run.tx_cur   = NULL;
             m->run.tx_state = TX_IDLE;
+            if (m->cfg.get_us != NULL && m->run.gap_us != 0u) {
+                m->run.last_bus_activity_us = m->cfg.get_us();
+            }
         }
         break;
 
@@ -289,11 +299,11 @@ bool nx_modbus_rtu_master_init(nx_modbus_rtu_master_t *m, const nx_modbus_rtu_ma
         return false;
     }
 
-    m->cfg              = *cfg;
-    m->run.rx_len       = 0u;
-    m->run.tx_state     = TX_IDLE;
-    m->run.gap_start_us = 0u;
-    m->run.tx_cur       = NULL;
+    m->cfg                      = *cfg;
+    m->run.rx_len               = 0u;
+    m->run.tx_state             = TX_IDLE;
+    m->run.last_bus_activity_us = 0u;
+    m->run.tx_cur               = NULL;
 
     /* Resolve the TX inter-frame gap: 3.5 chars from baud (11 bits/char):
      * 3.5 * 11 * 1e6 / baud us. +1 rounds up. 0 baud => no gap. */
@@ -305,6 +315,11 @@ bool nx_modbus_rtu_master_init(nx_modbus_rtu_master_t *m, const nx_modbus_rtu_ma
 
     if (m->cfg.dir_tx != NULL) {
         m->cfg.dir_tx(m->cfg.dir_ctx, false);   /* start with the bus released */
+    }
+
+    /* Start conservatively: even a pre-queued frame must wait one quiet interval. */
+    if (m->cfg.get_us != NULL && m->run.gap_us != 0u) {
+        m->run.last_bus_activity_us = m->cfg.get_us();
     }
 
     return true;
