@@ -21,8 +21,9 @@
  * is known from its function code (a fixed 8 bytes for 01..06, or a byte_count the
  * frame carries for 0F/10/17), so RX needs no inter-character timer - which matters
  * on a busy bus where arrival timing cannot be trusted. Resynchronization after a bad
- * address or CRC is done by dropping one byte and retrying. On TX, a 3.5-character
- * silence (derived from @c baud_rate) is inserted as a gap after each transmitted frame.
+ * address or CRC is done by dropping one byte and retrying. Before TX, the bus must
+ * have been observed silent for 3.5 character times (derived from @c baud_rate) since
+ * the most recent RX bytes or completed TX frame.
  *
  * I/O is injected (this module touches no hardware): a non-blocking @c read pulls
  * received bytes, a non-blocking @c write starts a transmission, @c is_busy reports
@@ -30,8 +31,8 @@
  * driven when free), and an optional @c dir_tx drives the RS-485 direction (DE) pin.
  * The serial callbacks (@c read / @c write / @c is_busy) share one @c io_ctx; the DE
  * pin, often a separate GPIO, gets its own @c dir_ctx. Timing is supplied by the
- * caller through the @c get_us callback, read on demand to time the TX inter-frame
- * gap; being a single system-wide time source, it takes no context.
+ * caller through the @c get_us callback, which timestamps observed RX activity and
+ * completed TX frames; being a single system-wide time source, it takes no context.
  *
  * Memory: the RX framing buffer is caller-provided (@c rx_buf / @c rx_size); all
  * request/response messages are allocated from a caller-provided tiered pool via
@@ -114,8 +115,8 @@ typedef struct {
 typedef struct {
     uint8_t   slave_addr;   /**< This slave's unicast address, 1..247 */
 
-    uint32_t  baud_rate;    /**< Line baud; used to derive the TX inter-frame gap
-                                 (3.5 chars). 0 = no inter-frame gap is enforced. */
+    uint32_t  baud_rate;    /**< Line baud; used to derive the pre-TX bus-silence gap
+                                 (3.5 chars). 0 = no silence gap is enforced. */
 
     bool      accept_broadcast;  /**< true = also accept frames addressed to the
                                  broadcast address (0); such a request is dispatched
@@ -151,9 +152,9 @@ typedef struct {
     bool   (*is_busy)(void *ctx);
     /** Drive the RS-485 direction pin: true = transmit, false = receive. May be NULL. */
     void   (*dir_tx)(void *ctx, bool enable);
-    /** Return a free-running microsecond counter (wrap-around safe). Used only to
-     *  time the TX inter-frame gap; if NULL, no gap is enforced. A single system-wide
-     *  time source, so it takes no context. */
+    /** Return a free-running microsecond counter (wrap-around safe). Used to timestamp
+     *  observed RX activity and completed TX frames so every transmission starts only
+     *  after the configured silence gap. If NULL, no gap is enforced. */
     uint32_t (*get_us)(void);
 
     void   *io_ctx;         /**< Context for the serial callbacks (read / write / is_busy) */
@@ -170,10 +171,10 @@ typedef struct {
     nx_modbus_rtu_slave_cfg_t cfg;   /**< Copied configuration */
     struct {
         size_t        rx_len;        /**< Valid bytes currently held in rx_buf */
-        uint32_t      gap_us;        /**< Resolved TX inter-frame gap */
-        uint8_t       tx_state;      /**< TX state machine (internal enum) */
-        uint32_t      gap_start_us;  /**< get_us() timestamp when the last frame finished */
-        nx_ref_msg_t *tx_cur;        /**< Message currently being transmitted */
+        uint32_t      gap_us;                /**< Resolved pre-TX silence gap */
+        uint8_t       tx_state;              /**< TX state machine (internal enum) */
+        uint32_t      last_bus_activity_us;  /**< Last observed RX or completed TX time */
+        nx_ref_msg_t *tx_cur;                /**< Message currently being transmitted */
     } run;
 } nx_modbus_rtu_slave_t;
 
@@ -184,7 +185,8 @@ typedef struct {
  * at least the shortest request plus one byte of slack for overflow detection
  * (>= sizeof(nx_modbus_rtu_req_fix_t) + 1).
  * On success, @c dir_tx is called with @c false, when supplied, so the bus starts
- * released in receive mode.
+ * released in receive mode. When gap timing is enabled, @c get_us is sampled during
+ * initialization so even a response already in the queue waits one quiet interval.
  *
  * Every subscription must carry a @c queue: one without it would own an address range
  * and then swallow every request in it, so it is rejected here rather than at runtime.
@@ -224,8 +226,8 @@ void nx_modbus_rtu_slave_deinit(nx_modbus_rtu_slave_t *s);
  *
  * Each call: pulls available RX bytes and dispatches every complete valid frame to
  * its subscribers (or emits an exception), then advances the TX state machine,
- * transmitting at most the flow permits and honoring the inter-frame gap. Time, when
- * needed for the gap, is read from the @c get_us callback.
+ * transmitting at most the flow permits and only after the bus has been observed quiet
+ * for the configured inter-frame gap. Time is read from the @c get_us callback.
  *
  * @param  s Instance, must not be NULL.
  */

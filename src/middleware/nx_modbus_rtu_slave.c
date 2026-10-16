@@ -6,7 +6,7 @@
  *   - slave_rx: pull bytes, slice length-known frames, CRC + address check, then
  *     dispatch each frame to its subscribers (or emit an exception).
  *   - slave_tx: a small state machine that drains the shared response queue, one
- *     frame at a time, honoring the 3.5-character inter-frame gap.
+ *     frame at a time, only after 3.5 character times of observed bus silence.
  */
 #include "nx_modbus_rtu_slave.h"
 
@@ -17,9 +17,8 @@
 
 /** TX state machine states. */
 enum {
-    TX_IDLE = 0,   /**< Nothing in flight; may start the next queued frame */
-    TX_SENDING,    /**< A frame is on the wire; waiting for the interface to go idle */
-    TX_GAP         /**< Frame sent; waiting out the inter-frame silence */
+    TX_IDLE = 0,   /**< Nothing in flight; may start after sufficient bus silence */
+    TX_SENDING     /**< A frame is on the wire; waiting for the interface to go idle */
 };
 
 /* ------------------------------------------------------------------ */
@@ -254,6 +253,11 @@ static void slave_rx(nx_modbus_rtu_slave_t *s)
         size_t got = s->cfg.read(s->cfg.io_ctx,
                                  s->cfg.rx_buf + s->run.rx_len,
                                  s->cfg.rx_size - s->run.rx_len);
+        if (got > 0u) {
+            if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
+                s->run.last_bus_activity_us = s->cfg.get_us();
+            }
+        }
         s->run.rx_len += got;
     }
 
@@ -326,6 +330,10 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
         if (s->cfg.is_busy != NULL && s->cfg.is_busy(s->cfg.io_ctx)) {
             break;
         }
+        if (s->cfg.get_us != NULL && s->run.gap_us != 0u &&
+            (uint32_t)(s->cfg.get_us() - s->run.last_bus_activity_us) < s->run.gap_us) {
+            break;
+        }
         nx_ref_msg_t *msg = NULL;
         if (nx_queue_pop(s->cfg.response_queue, &msg) != NX_QUEUE_OK || msg == NULL) {
             break;
@@ -346,32 +354,34 @@ static void slave_tx(nx_modbus_rtu_slave_t *s)
             s->run.tx_state = TX_IDLE;
             break;
         }
-        s->run.tx_state = TX_SENDING;
+        if (s->cfg.is_busy == NULL) {
+            /* A blocking write returns only after the last stop bit left the wire. */
+            if (s->cfg.dir_tx != NULL) {
+                s->cfg.dir_tx(s->cfg.dir_ctx, false);
+            }
+            nx_ref_msg_release(s->run.tx_cur);
+            s->run.tx_cur   = NULL;
+            s->run.tx_state = TX_IDLE;
+            if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
+                s->run.last_bus_activity_us = s->cfg.get_us();
+            }
+        } else {
+            s->run.tx_state = TX_SENDING;
+        }
         break;
     }
 
     case TX_SENDING:
-        /* A NULL is_busy means write() was blocking: treat as already done. */
-        if (s->cfg.is_busy == NULL || !s->cfg.is_busy(s->cfg.io_ctx)) {
+        if (!s->cfg.is_busy(s->cfg.io_ctx)) {
             if (s->cfg.dir_tx != NULL) {
-                s->cfg.dir_tx(s->cfg.dir_ctx, false);  /* release the bus */
+                s->cfg.dir_tx(s->cfg.dir_ctx, false);
             }
             nx_ref_msg_release(s->run.tx_cur);
-            s->run.tx_cur = NULL;
-            /* Enter the inter-frame gap only if we have a clock and a gap to wait. */
-            if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
-                s->run.gap_start_us = s->cfg.get_us();
-                s->run.tx_state     = TX_GAP;
-            } else {
-                s->run.tx_state = TX_IDLE;
-            }
-        }
-        break;
-
-    case TX_GAP:
-        /* Only reached when get_us != NULL (guarded above), so the call is safe. */
-        if ((uint32_t)(s->cfg.get_us() - s->run.gap_start_us) >= s->run.gap_us) {
+            s->run.tx_cur   = NULL;
             s->run.tx_state = TX_IDLE;
+            if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
+                s->run.last_bus_activity_us = s->cfg.get_us();
+            }
         }
         break;
 
@@ -412,11 +422,11 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
         return false;
     }
 
-    s->cfg              = *cfg;
-    s->run.rx_len       = 0u;
-    s->run.tx_state     = TX_IDLE;
-    s->run.gap_start_us = 0u;
-    s->run.tx_cur       = NULL;
+    s->cfg                      = *cfg;
+    s->run.rx_len               = 0u;
+    s->run.tx_state             = TX_IDLE;
+    s->run.last_bus_activity_us = 0u;
+    s->run.tx_cur               = NULL;
 
     /* Resolve the TX inter-frame gap: 3.5 chars from baud (11 bits/char):
      * 3.5 * 11 * 1e6 / baud us. +1 rounds up. 0 baud => no gap. */
@@ -428,6 +438,11 @@ bool nx_modbus_rtu_slave_init(nx_modbus_rtu_slave_t *s, const nx_modbus_rtu_slav
 
     if (s->cfg.dir_tx != NULL) {
         s->cfg.dir_tx(s->cfg.dir_ctx, false);   /* start with the bus released */
+    }
+
+    /* Start conservatively: even a pre-queued frame must wait one quiet interval. */
+    if (s->cfg.get_us != NULL && s->run.gap_us != 0u) {
+        s->run.last_bus_activity_us = s->cfg.get_us();
     }
 
     return true;

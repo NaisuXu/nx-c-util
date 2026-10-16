@@ -143,13 +143,15 @@ dispatch, and transmission.
   require an inter-character (T3.5) timer. After an invalid address, unknown
   function code, or bad CRC, the parser discards one byte and attempts to
   resynchronize. Because an unknown function code has no known frame length, it
-  is discarded this way rather than answered with exception `0x01`. On
-  transmission, a 3.5-character gap derived from `baud_rate` follows each frame.
+  is discarded this way rather than answered with exception `0x01`. Before each
+  transmission, the bus must have remained silent for a 3.5-character gap derived
+  from `baud_rate`; receiving bytes or completing a transmission restarts that gap.
 - **Injected non-blocking I/O** — `read` / `write` move bytes, `is_busy` reports
   whether the interface is still transmitting (so a shared, non-exclusive bus is
   driven only when free), optional `dir_tx` toggles the RS-485 direction (DE) pin,
-  and `get_us` times the TX gap. A NULL `is_busy` treats `write` as blocking; a NULL
-  `get_us` skips the gap. The serial callbacks (`read` / `write` / `is_busy`) share
+  and `get_us` timestamps the most recent RX or completed TX activity. A NULL
+  `is_busy` treats `write` as blocking; a NULL `get_us` skips the pre-TX gap. The
+  serial callbacks (`read` / `write` / `is_busy`) share
   `io_ctx`, which may stay NULL when the driver is a single module-owned instance;
   `dir_tx` takes its own `dir_ctx` (the DE pin is often a separate GPIO), and `get_us`
   takes no context as a system-wide time source. A `write` that returns false has not
@@ -194,7 +196,7 @@ const nx_modbus_rtu_slave_sub_t subs[] = {
 nx_modbus_rtu_slave_t     slave;
 nx_modbus_rtu_slave_cfg_t cfg = {
     .slave_addr     = 0x11u,
-    .baud_rate      = 115200u,         /* derives the 3.5-char TX gap */
+    .baud_rate      = 115200u,         /* derives the 3.5-char pre-TX gap */
     .pool           = &pool,           /* tiered pool for messages */
     .rx_buf         = rx_buf,
     .rx_size        = sizeof(rx_buf),

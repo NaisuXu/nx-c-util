@@ -107,6 +107,25 @@ static bool mock_busy_hung(void *ctx)
     return g_tx_hung;
 }
 
+/* A controllable non-blocking transmitter. Tests clear g_tx_busy at the exact
+ * instant the final stop bit is deemed to have left the wire. */
+static bool g_tx_busy;
+
+static bool mock_write_async(void *ctx, const uint8_t *src, size_t len)
+{
+    if (!mock_write(ctx, src, len)) {
+        return false;
+    }
+    g_tx_busy = true;
+    return true;
+}
+
+static bool mock_busy_async(void *ctx)
+{
+    (void)ctx;
+    return g_tx_busy;
+}
+
 /* RS-485 direction pin: records the level so a test can check the bus was released. */
 static bool g_de_asserted;
 
@@ -129,6 +148,12 @@ static size_t after_free_probe(const nx_tiered_mem_pool_t *pool)
 static uint32_t mock_get_us(void)
 {
     return g_io.clock_us;
+}
+
+static uint32_t expected_gap_us(uint32_t baud_rate)
+{
+    assert(baud_rate != 0u);
+    return (uint32_t)(38500000UL / baud_rate) + 1u;
 }
 
 /* ------------------------------------------------------------------ */
@@ -341,7 +366,7 @@ int nx_modbus_rtu_slave_example_run(void)
     nx_modbus_rtu_slave_t slave;
     nx_modbus_rtu_slave_cfg_t cfg = {
         .slave_addr     = SLAVE_ADDR,
-        .baud_rate      = 115200,   /* derives the ~335us TX inter-frame gap */
+        .baud_rate      = 115200,   /* used to resolve the RTU inter-frame gap */
         .accept_broadcast = false,  /* default: address 0 is dropped, unicast only */
         .pool           = &pool,
         .rx_buf         = g_rx_buf,
@@ -393,7 +418,7 @@ int nx_modbus_rtu_slave_example_run(void)
      * naturally - there is no artificial "receive then transmit" split. */
     printf("Driving the slave; frames it puts on the wire:\n");
     for (int i = 0; i < 60; i++) {
-        g_io.clock_us += 1000;   /* advance the mock clock past the ~335us gap */
+        g_io.clock_us += 1000;   /* advance the mock clock between service calls */
         nx_modbus_rtu_slave_process(&slave);
         business_serve("valve", &q_valve, &response_queue, &pool);
         business_serve("sys",   &q_sys,   &response_queue, &pool);
@@ -541,7 +566,9 @@ int nx_modbus_rtu_slave_example_run(void)
         g_io.rx     = script;
         g_io.rx_len = n;
         nx_modbus_rtu_slave_process(&s4);   /* unsupported func -> exception queued */
-        nx_modbus_rtu_slave_process(&s4);   /* picks it up, write starts, stays TX_SENDING */
+        assert(g_io.tx_len == 0u);          /* RX activity starts the pre-TX quiet time */
+        g_io.clock_us += expected_gap_us(c4.baud_rate);
+        nx_modbus_rtu_slave_process(&s4);   /* gap elapsed: write starts, stays TX_SENDING */
         nx_modbus_rtu_slave_process(&s4);   /* still busy: the frame is stuck in tx_cur */
 
         assert(g_io.tx_len == 5u);                    /* the bytes were handed over */
@@ -576,9 +603,14 @@ int nx_modbus_rtu_slave_example_run(void)
         g_io.rx     = script;
         g_io.rx_len = n;
 
-        /* One call is the whole story: rx queues the exception, tx picks it up and the
-         * write refuses it. The check lands here, before any further iteration could
-         * tidy up after the fact. */
+        /* RX queues the exception, but the slave must first observe the bus gap. */
+        nx_modbus_rtu_slave_process(&s5);
+        assert(!g_de_asserted);
+        assert(g_io.tx_len == 0u);
+
+        /* Once write is attempted and refuses the frame, the bus and pool block are
+         * released in that same iteration; no later cleanup pass is needed. */
+        g_io.clock_us += expected_gap_us(c5.baud_rate);
         nx_modbus_rtu_slave_process(&s5);
 
         assert(!g_de_asserted);             /* bus released in that same iteration */
@@ -678,6 +710,91 @@ int nx_modbus_rtu_slave_example_run(void)
         printf("  OK: the three frames above are the whole wire trace\n");
 
         nx_modbus_rtu_slave_deinit(&s6);
+    }
+
+    /* ---- every RX/TX activity restarts the pre-transmit quiet-time gate ----
+     * Use a controllable non-blocking transmitter so the instant at which TX really
+     * finishes is independent from the instant write() accepts its bytes. */
+    {
+        nx_ref_msg_t *stale = NULL;
+        while (nx_queue_pop(&response_queue, &stale) == NX_QUEUE_OK) {
+            nx_ref_msg_release(stale);
+        }
+
+        nx_modbus_rtu_slave_t     s7;
+        nx_modbus_rtu_slave_cfg_t c7 = cfg;
+        c7.baud_rate  = 9600u;             /* a long gap makes both boundaries explicit */
+        c7.subs       = NULL;
+        c7.subs_count = 0u;
+        c7.write      = mock_write_async;
+        c7.is_busy    = mock_busy_async;
+        c7.dir_tx     = mock_dir_tx;
+
+        static uint8_t script[9];
+        size_t n = build_fixed_req(script, SLAVE_ADDR, NX_MODBUS_FC_READ_COILS, 0u, 1u);
+        script[n] = 0xA5u;                 /* a later byte that restarts RX silence */
+
+        memset(&g_io, 0, sizeof(g_io));
+        g_io.clock_us = 1000u;
+        g_io.rx       = script;
+        g_io.rx_len   = n;                 /* expose only the request initially */
+        g_tx_busy     = false;
+        g_de_asserted = false;
+        assert(nx_modbus_rtu_slave_init(&s7, &c7));
+
+        const uint32_t gap_us = expected_gap_us(c7.baud_rate);
+        assert(gap_us > 1u);
+
+        nx_modbus_rtu_slave_process(&s7);  /* request produces an exception response */
+        assert(g_io.tx_len == 0u);
+        assert(!g_de_asserted);
+
+        g_io.clock_us += gap_us - 1u;
+        nx_modbus_rtu_slave_process(&s7);  /* one microsecond short: still silent */
+        assert(g_io.tx_len == 0u);
+
+        g_io.rx_len = n + 1u;              /* make the trailing byte available now */
+        nx_modbus_rtu_slave_process(&s7);  /* RX at this instant restarts the gap */
+        assert(g_io.tx_len == 0u);
+
+        g_io.clock_us += gap_us - 1u;
+        nx_modbus_rtu_slave_process(&s7);
+        assert(g_io.tx_len == 0u);         /* reset gap is also enforced to gap - 1 */
+
+        g_io.clock_us++;
+        nx_modbus_rtu_slave_process(&s7);  /* exactly one full gap after the last RX */
+        assert(g_io.tx_len == 5u);
+        assert(g_de_asserted);
+        assert(g_tx_busy);
+        assert(nx_modbus_rtu_check_crc(g_io.tx, 5u));
+
+        /* Queue another frame while the first is still physically transmitting. */
+        assert(nx_modbus_rtu_slave_reply_exception(&pool, &response_queue,
+                                                   SLAVE_ADDR, NX_MODBUS_FC_READ_COILS,
+                                                   NX_MODBUS_EXC_ILLEGAL_FUNCTION) ==
+               NX_MODBUS_RTU_SLAVE_OK);
+
+        g_io.clock_us += 123u;
+        g_tx_busy = false;
+        nx_modbus_rtu_slave_process(&s7);  /* observes the exact TX-complete instant */
+        assert(g_io.tx_len == 5u);
+        assert(!g_de_asserted);
+
+        g_io.clock_us += gap_us - 1u;
+        nx_modbus_rtu_slave_process(&s7);
+        assert(g_io.tx_len == 5u);         /* measured from completion, not write start */
+
+        g_io.clock_us++;
+        nx_modbus_rtu_slave_process(&s7);
+        assert(g_io.tx_len == 10u);        /* next frame starts at the exact boundary */
+        assert(g_de_asserted);
+        assert(g_tx_busy);
+        assert(nx_modbus_rtu_check_crc(g_io.tx + 5u, 5u));
+
+        g_tx_busy = false;
+        nx_modbus_rtu_slave_process(&s7);
+        nx_modbus_rtu_slave_deinit(&s7);
+        printf("  OK: RX and TX activity both restart the pre-transmit RTU gap\n");
     }
 
     return 0;
