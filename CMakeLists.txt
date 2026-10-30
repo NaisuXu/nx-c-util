@@ -41,6 +41,7 @@ set(NX_MIDDLEWARE_SOURCES
 set(NX_DEVICE_SOURCES
     src/device/nx_ws2812.c
     src/device/nx_kth7112.c
+    src/device/nx_ktm5220.c
 )
 
 # Core examples executable
@@ -71,6 +72,7 @@ add_executable(nx_device_examples
     examples/device/nx_device_examples.c
     examples/device/nx_ws2812_example.c
     examples/device/nx_kth7112_example.c
+    examples/device/nx_ktm5220_example.c
     ${NX_DEVICE_SOURCES}
 )
 

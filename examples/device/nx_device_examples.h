@@ -18,6 +18,9 @@ int nx_ws2812_example_run(void);
 /** Run the nx_kth7112 usage examples. Returns 0 on success, non-zero on failure. */
 int nx_kth7112_example_run(void);
 
+/** Run the nx_ktm5220 usage examples. Returns 0 on success, non-zero on failure. */
+int nx_ktm5220_example_run(void);
+
 #ifdef __cplusplus
 }
 #endif

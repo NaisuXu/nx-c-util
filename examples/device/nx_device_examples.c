@@ -5,6 +5,7 @@
  * The actual examples live in per-device files:
  *   - nx_ws2812_example.c -> nx_ws2812_example_run()
  *   - nx_kth7112_example.c -> nx_kth7112_example_run()
+ *   - nx_ktm5220_example.c -> nx_ktm5220_example_run()
  */
 #include "nx_device_examples.h"
 
@@ -16,6 +17,7 @@ int main(void)
 
     rc |= nx_ws2812_example_run();
     rc |= nx_kth7112_example_run();
+    rc |= nx_ktm5220_example_run();
 
     return rc;
 }

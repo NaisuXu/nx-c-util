@@ -91,3 +91,59 @@ nx_kth7112_lock(&enc);                                   /* 重新锁定，拒�
 
 > **注意：** `nx_kth7112_write_mtp` 会将寄存器组写入非易失存储器，且该操作不可撤销。两次烧写操作之间必须间隔超过 `NX_KTH7112_MTP_MIN_INTERVAL_MS`（400 ms），烧写期间还需保持供电稳定。SPI 端口也必须保证寄存器写入帧中第 24 个时钟的高电平持续时间超过 100 ns，并使帧间隔超过 150 ns。请通过 SPI 时钟和末尾时钟行为满足前一项要求。驱动会在每帧结束后通过 `delay_ns` 请求 150 ns 延时；回调或端口必须确保实际间隔超过 150 ns。接近器件的 10 Mbps 上限时，应明确验证这两项时序。
 
+## nx_ktm5220 —— KTM5220 磁编码器 SPI 驱动
+
+该驱动依据 KTM5220 v0.5（2026-05-14）手册实现四线 SPI 协议。端口使用 Mode 3、MSB 优先，时钟不超过 20 MHz。模块沿用 `nx_kth7112` 的回调接入方式，不使用动态内存或浮点运算。
+
+- **角度与报警** —— `nx_ktm5220_read_sample` 在同一帧读取 21 位角度和 3 位状态，并校验 CRC。角度范围为 `0 .. 0x1FFFFF`，可用 `nx_ktm5220_raw_to_mdeg` 转换为毫度。状态掩码分别表示转速过快或存储器 CRC 异常、ADC 幅值报警、供电欠压。CRC 正确时，即使存在报警，`read_sample` 仍返回 `NX_KTM5220_OK`，调用方应检查 `sample.status`；只读取角度的 `nx_ktm5220_read_angle` 则会在存在报警时返回 `NX_KTM5220_ERR_STATUS`。各读取接口出错时均不改动输出值。
+- **寄存器与写保护** —— `read_reg8`/`write_reg8` 和 `read_reg16`/`write_reg16` 提供通用访问，16 位字段按低地址低字节组织，通过独立帧访问，并拒绝地址回绕。写入前调用 `nx_ktm5220_unlock`：向 `0x1A` 写入 `0xAA`，再进行带 CRC 的回读，确认值为 `0x01`；未解锁时写接口返回 `NX_KTM5220_ERR_LOCKED`。手册未提供主动上锁命令。芯片复位后应重新初始化句柄并在配置前解锁。写寄存器没有回显，需要确认写入结果时，应由应用额外回读。
+- **零点与校准** —— `get_zero`/`set_zero` 访问 21 位零点偏移，`zero_here` 触发自动捕获当前位置并置零。`set_zero` 和 `update_reg8` 会保留无关位；`set_calibration` 控制 `CAL_REG_SET`，`read_calibration_status` 读取两位校准状态。电机转速与轮询超时由应用管理。多帧操作不具备原子性，写入中途出错时可能已有部分字节生效。
+- **同步全双工传输** —— `cs(ctx, true)` 拉低 CSN，`false` 拉高。每个片选窗口仅调用一次 `transfer(ctx, tx, rx, len)`，完成整帧全双工收发，可直接映射到硬件 SPI 的收发接口。`tx`、`rx` 均非空且为独立缓冲区；回调必须在全部 `len` 字节发送、接收完成后才返回。驱动在接收响应期间提供全零占位字节，忽略命令期间处于高阻状态的 MISO 数据。完整帧长度为：角度读取 6 字节，寄存器读取 4 字节，寄存器写入和 MTP 烧写均为 3 字节。可选的 `is_busy` 用于在 SPI 端口忙时立即拒绝本帧；可选的 `delay_ns` 会在释放片选前请求 13 ns 延时，以满足最后一次 SCK 上升沿到 CSN 上升沿至少 12.5 ns 的要求。没有该回调时须由端口自身保证保持时间。`nx_ktm5220_busy` 只反映 SPI 端口状态，不能判断校准或 MTP 是否完成。共享句柄或 SPI 总线时，须串行执行完整 API 调用。
+
+```c
+#include "nx_ktm5220.h"
+
+/* spi_cs 和 spi_transfer 由应用实现，均为同步回调。 */
+bool encoder_init(nx_ktm5220_t *enc, void *spi_ctx)
+{
+    const nx_ktm5220_cfg_t cfg = {
+        .cs         = spi_cs,
+        .transfer   = spi_transfer, /* 整帧全双工传输 */
+        .is_busy    = NULL,
+        .delay_ns   = delay_ns,  /* 端口能保证 TH 时可设为 NULL */
+        .io_ctx     = spi_ctx,
+        .crc_invert = false,     /* 对应上电默认 SPI_CRC 配置 */
+    };
+    return nx_ktm5220_init(enc, &cfg);
+}
+
+bool encoder_read_mdeg(nx_ktm5220_t *enc, uint32_t *mdeg)
+{
+    nx_ktm5220_sample_t sample;
+    if (mdeg == NULL ||
+        nx_ktm5220_read_sample(enc, &sample) != NX_KTM5220_OK) {
+        return false;
+    }
+    if (sample.status != 0u) {
+        return false;            /* 应用按各状态位处理报警 */
+    }
+    *mdeg = nx_ktm5220_raw_to_mdeg(sample.raw);
+    return true;
+}
+
+nx_ktm5220_ret_t encoder_set_offset(nx_ktm5220_t *enc, uint32_t raw)
+{
+    nx_ktm5220_ret_t ret = nx_ktm5220_unlock(enc);
+    if (ret != NX_KTM5220_OK) {
+        return ret;
+    }
+    return nx_ktm5220_set_zero(enc, raw);  /* 仅修改 RAM，不发送 MTP 命令 */
+}
+```
+
+CRC 参数为多项式 `0x07`、初值 `0x00`、不反射。`cfg.crc_invert = false` 选择最终异或 `0x00`，`true` 选择 `0xFF`，必须与芯片的 `SPI_CRC` 配置一致。所提供的 v0.5 手册未公开该配置的寄存器地址，也未明确 CRC 覆盖范围。本驱动按响应数据计算：寄存器读取覆盖一个数据字节，角度读取覆盖完整的三个角度/状态字节；首次接入硬件时需核对这一解释。
+
+`nx_ktm5220_write_mtp` 发送烧写命令并校验单字节应答 `0x55`；成功只代表命令获得应答，不能视为烧写完成。应用须保持供电稳定，等待至少 `NX_KTM5220_MTP_PROGRAM_TIME_MS`（2501 ms），随后重新上电，再进行其他操作。即使返回 I/O 错误，只要命令可能已到达芯片，也应执行等待，不能立即重试。驱动不阻塞等待，也不计时跟踪烧写完成状态。手册第 9.2.1 与 9.2.3 节对寄存器触发校准是否自动保存存在矛盾；`set_calibration` 仅发送触发操作，但芯片自身可能烧写 MTP，应用使用前需确认实际行为。
+
+可运行的模拟 SPI 示例位于 `examples/device/nx_ktm5220_example.c`，随 `nx_device_examples` 一起执行。
+
