@@ -25,7 +25,7 @@ nx-c-util/
 │   ├── core/         # Core data structures and utilities
 │   ├── middleware/   # Protocol and diagnostic middleware
 │   ├── algo/         # Algorithms (crc, sha256)
-│   └── device/       # Platform-independent device drivers (ws2812, kth7112, ktm5220)
+│   └── device/       # Platform-independent device drivers (ws2812, kth7112, ktm5220, mp6546)
 └── examples/
     ├── core/         # Core module usage examples
     ├── middleware/   # Middleware module usage examples
@@ -84,6 +84,7 @@ See [Algorithm Modules Documentation](docs/algo_en.md) for detailed descriptions
 - [nx_ws2812](docs/device_en.md#nx_ws2812--ws2812b-rgb-led-strip-driver) — WS2812/WS2812B RGB LED strip driver
 - [nx_kth7112](docs/device_en.md#nx_kth7112--kth7112-magnetic-angle-encoder-over-spi) — KTH7112 16-bit magnetic angle encoder over SPI
 - [nx_ktm5220](docs/device_en.md#nx_ktm5220--ktm5220-magnetic-angle-encoder-over-spi) — KTM5220 21-bit magnetic angle encoder over SPI
+- [nx_mp6546](docs/device_en.md#nx_mp6546--mp6546-three-phase-motor-driver) — MP6546 voltage-mode FOC and PWM through 16-bit register callbacks
 
 See [Device Modules Documentation](docs/device_en.md) for detailed descriptions and examples.
 

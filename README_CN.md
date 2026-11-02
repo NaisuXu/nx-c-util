@@ -20,7 +20,7 @@ nx-c-util/
 │   ├── core/         # 核心数据结构与工具
 │   ├── middleware/   # 协议与诊断中间件
 │   ├── algo/         # 算法（crc, sha256）
-│   └── device/       # 平台无关的设备驱动（ws2812, kth7112, ktm5220）
+│   └── device/       # 平台无关的设备驱动（ws2812, kth7112, ktm5220, mp6546）
 └── examples/
     ├── core/         # 核心模块使用示例
     ├── middleware/   # 中间件模块使用示例
@@ -77,6 +77,7 @@ nx-c-util/
 - [nx_ws2812](docs/device_cn.md#nx_ws2812--ws2812b-rgb-灯带驱动) — WS2812/WS2812B RGB LED 灯带驱动
 - [nx_kth7112](docs/device_cn.md#nx_kth7112--kth7112-磁编码器-spi-驱动) — KTH7112 16 位磁编码器 SPI 驱动
 - [nx_ktm5220](docs/device_cn.md#nx_ktm5220--ktm5220-磁编码器-spi-驱动) — KTM5220 21 位磁编码器 SPI 驱动
+- [nx_mp6546](docs/device_cn.md#nx_mp6546--mp6546-三相电机驱动) — MP6546 电压型 FOC 与 PWM，使用 16 位寄存器回调
 
 详细说明和示例请参阅[设备模块文档](docs/device_cn.md)。
 

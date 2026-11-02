@@ -147,3 +147,74 @@ CRC 参数为多项式 `0x07`、初值 `0x00`、不反射。`cfg.crc_invert = fa
 
 可运行的模拟 SPI 示例位于 `examples/device/nx_ktm5220_example.c`，随 `nx_device_examples` 一起执行。
 
+## nx_mp6546 — MP6546 三相电机驱动
+
+本模块根据 MP6546 Rev. 1.0（2023-03-20）实现寄存器语义，使用调用方提供的存储和整数运算。芯片根据 d/q 轴电压指令及转子角度生成三相输出；电流、速度、位置环，以及对齐、电压/电流限制、EN、时序和故障恢复由应用管理。
+
+公开手册未给出完整的 I²C 事务和字节序，因此必须提供经过验证的同步 `read_reg16`、`write_reg16` 平台回调。本模块不包含 I²C 线上协议后端，也不根据寄存器表猜测帧格式。每个寄存器地址对应**一个 16 位寄存器**，不能当作两个相邻的 8 位寄存器访问。回调的 `uint16_t` 值按手册 bit[15:0] 的数值解释，与 CPU 大小端无关；字节序、START/重复 START/STOP、ACK、总线释放和有界超时均由移植层处理。即使使用 DMA，也须在全部传输完成后才返回。`addr7` 为未左移、不含读写位的地址，只支持 `0x07`、`0x08`、`0x09`。配置结构会复制到句柄中，`io_ctx` 指向的对象须在句柄使用期间保持有效。
+
+- **初始化与配置** —— `nx_mp6546_init` 只校验并复制配置，不进行 I/O、探测、复位、EN 操作或电机启动；返回成功不代表硬件已经就绪。传感器、驱动模式和角度源接口通过读改写保留无关位和保留位。`set_motor_angle` 设置 1–15 对极、12 位机械角偏移及方向，不执行对齐，也不推断偏移符号；中途出错可能只完成部分配置。`set_test_angle` 设置 12 位固定角度，仅在矢量模式且显式选择 `NX_MP6546_ANGLE_TEST` 后使用。
+- **样本与故障** —— `read_sample` 从同一次 `0x0C` 读取获得 15 位机械角和综合故障位，即使 `sample.fault` 为真也返回 `NX_MP6546_OK`。只读角度的 `read_angle` 遇到该故障会返回 `NX_MP6546_ERR_STATUS`，角度输出保持不变。`read_faults` 单独读取 `0x0D`，返回保持原位的 `NX_MP6546_FAULT_*` 标志，不包含 INL 补偿字节；它与角度样本并非同时采集。读取和转换接口在任何错误时均不修改输出。`raw_to_mdeg` 将有效的 `0..0x7FFF` 角度转换为 `0..359989` 毫度；输出位宽不代表传感器精度。
+- **矢量指令与单位** —— `set_dq` 接受 `-512..511` 的有符号原始码，编码为 10 位补码，先写 Ud（`0x08`），再写 Uq（`0x09`）；`set_uq` 只写 Uq。这些指令字的高位保留位发送为零。应用须已配置矢量模式，接口不检查或切换模式。`voltage_to_raw` 通过整数运算计算 `round(512 * sqrt(3) * voltage_mv / bus_voltage_mv)`；母线电压为零或舍入结果越界时返回错误，不进行饱和截断。应用传入实测母线电压，并限制 d/q 电压矢量的总幅值、变化率、电流和堵转时间。
+- **PWM 指令** —— 应用已选择占空比模式后，`set_pwm` 先校验全部三相，再执行 I/O；即使某相被关闭，其 `duty_permille` 也必须在 `0..1000` 范围内。使能相的占空比四舍五入到硬件的 8 位步长，低字节随占空比增大而减小：0‰ 编码为 `0x1FF`，1000‰ 编码为 `0x100`。关闭相编码为零，与使能但占空比为 0‰ 的情况不同。A/B/C 依次写入 `0x07/0x08/0x09`，手册说明写 `0x09` 时提交整组。中途出错可能留下待提交值或已生效值；应用完成恢复后，应重新提交完整三相组。
+- **寄存器访问** —— 原始接口拒绝未公开地址、向只读寄存器写入和读取命令寄存器；原始写入的保留位及副作用由调用方负责。`update_reg16` 使用 `(old & ~mask) | (value & mask)`，只接受文档明确的普通可写字段，拒绝命令、只读、生产码和保留字段；掩码为零时不进行 I/O，读失败时不会继续写。修改硬件地址后，句柄不会自动更新；须由应用确认新地址，再用新地址重新初始化句柄。
+
+共享句柄或总线时，应串行执行完整 API 调用，包括读改写和多寄存器操作。D/Q 和多寄存器配置写入不保证原子性。任何失败的写入都可能已到达芯片，硬件可能处于部分更新或未知状态。模块不自动重试、回滚或操作 EN，何时停止输出以及如何恢复由应用决定。
+
+矢量模式与占空比模式共用 `0x07..0x09`。模式设置接口不重新初始化这些寄存器，也不安排安全切换；旧值在切换后可能被解释为另一种输出指令。应用须管理模式切换、就绪时序和输出指令。EN 拉低会完全关闭芯片，因此不能假定 EN 低时仍可配置。`enter_normal` 只发送工作模式命令，不复位或清除故障；`enter_standby` 设置 `STDBY_EN` 后发送待机命令，LDO 行为取决于 `TRIM_ENP`。SCL/SCK 下降沿可唤醒芯片，共享总线上的通信也可能结束待机，因此待机不等于可靠关断。
+
+使用 SPI 角度模式时，应用还须按第 11 页选择传感器角度读取：显式向 `NX_MP6546_REG_SPI_CMD`（`0x11`）写入零并检查结果。`read_sample` 只读取 `0x0C`，不会隐式修改传感器命令或配置其协议。
+
+以下应用片段接入经过验证的端口。调用 `motor_step` 前，应用必须已经显式完成供电和矢量模式配置、极对数/方向/偏移标定，选择传感器角度源，完成对齐并建立 Ud = 0。调用方提供经过限幅的 Uq 指令，检查返回值，并按自身 EN/恢复策略处理故障或 I/O 错误。
+
+```c
+#include "nx_mp6546.h"
+#include <stddef.h>
+
+/* 应用端口：同步完成已经验证的寄存器事务。 */
+extern bool port_read_reg16(void *ctx, uint8_t addr7,
+                            uint8_t reg, uint16_t *value);
+extern bool port_write_reg16(void *ctx, uint8_t addr7,
+                             uint8_t reg, uint16_t value);
+
+bool motor_bind(nx_mp6546_t *motor, void *port_ctx)
+{
+    const nx_mp6546_cfg_t cfg = {
+        .read_reg16  = port_read_reg16,
+        .write_reg16 = port_write_reg16,
+        .io_ctx      = port_ctx,
+        .addr7       = NX_MP6546_ADDR_LOW,
+    };
+    return nx_mp6546_init(motor, &cfg); /* 只建立软件绑定。 */
+}
+
+nx_mp6546_ret_t motor_step(nx_mp6546_t *motor, int32_t uq_mv,
+                           uint32_t bus_mv, uint32_t *angle_mdeg)
+{
+    if (angle_mdeg == NULL) {
+        return NX_MP6546_ERR_PARAM;
+    }
+    nx_mp6546_sample_t sample;
+    nx_mp6546_ret_t ret = nx_mp6546_read_sample(motor, &sample);
+    if (ret != NX_MP6546_OK) {
+        return ret;
+    }
+    if (sample.fault) {
+        return NX_MP6546_ERR_STATUS;
+    }
+    int16_t uq;
+    ret = nx_mp6546_voltage_to_raw(uq_mv, bus_mv, &uq);
+    if (ret != NX_MP6546_OK) {
+        return ret;
+    }
+    ret = nx_mp6546_set_uq(motor, uq);
+    if (ret != NX_MP6546_OK) {
+        return ret; /* 输出可能已改变，由调用方处理恢复。 */
+    }
+    *angle_mdeg = nx_mp6546_raw_to_mdeg(sample.angle_raw);
+    return NX_MP6546_OK;
+}
+```
+
+模块不提供 OTP 烧录、故障标志清除或广播命令：手册未公开所需的编程、清除语义及完整广播协议，寄存器写成功不代表掉电保存。手册还存在 ADC 位数（第 1 页为 12 位、第 5 页为 10 位）、过热关断阈值（第 5 页与第 13 页）及 `FLT_N_SVM` 位宽/频率编码（第 12 页与第 15–16 页）的矛盾，因此只公开该滤波字段的原位掩码，不提供频率枚举。Ud 按第 12 页和寄存器表使用 `0x08`，第 17 页标题误写为 `0x09`。上述事项须向 MPS 确认；平台事务、控制时序和保护行为还需在真实硬件上验证，主机寄存器模拟不能证明硬件兼容性。
+

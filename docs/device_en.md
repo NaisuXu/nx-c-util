@@ -271,3 +271,154 @@ confirm that behavior before using calibration in the application.
 The runnable fake-SPI example is in `examples/device/nx_ktm5220_example.c` and
 runs as part of `nx_device_examples`.
 
+## nx_mp6546 — MP6546 three-phase motor driver
+
+This module implements the register semantics in MP6546 Rev. 1.0
+(2023-03-20), using caller-owned storage and integer arithmetic. The chip
+generates three-phase outputs from d/q voltage commands and a rotor angle.
+Current, speed and position control, alignment, voltage/current limits, EN,
+timing and recovery belong to the application.
+
+The public manual does not specify the complete I2C transactions or byte order.
+The required synchronous `read_reg16` and `write_reg16` callbacks must therefore
+come from a verified platform port. This module does not supply an I2C wire
+backend or infer frames from the register map. Each register address identifies
+**one 16-bit register**, rather than two adjacent byte registers. Callback
+values use the manual's numeric bit[15:0] layout regardless of CPU endianness;
+the port handles byte order, START/repeated START/STOP, ACK, bus release and
+bounded timeouts. DMA transfers must finish before returning. `addr7` is
+unshifted and excludes the R/W bit; supported addresses are `0x07`, `0x08` and
+`0x09`. The configuration is copied, while `io_ctx` must outlive the handle.
+
+- **Initialization and configuration** — `nx_mp6546_init` validates and copies
+  the configuration without I/O, probing, resetting, changing EN or starting
+  the motor. It does not establish hardware readiness. Sensor, drive and angle
+  source setters perform read-modify-write and preserve unrelated and reserved
+  bits. `set_motor_angle` sets 1–15 pole pairs, a 12-bit mechanical-angle bias
+  and direction; it does not perform alignment or determine the bias sign.
+  This operation can fail after updating only part of the configuration.
+  `set_test_angle` sets a 12-bit fixed angle, which is used only after explicitly
+  selecting `NX_MP6546_ANGLE_TEST` in vector mode.
+- **Samples and faults** — `read_sample` obtains the 15-bit mechanical angle
+  and aggregate fault bit from the same `0x0C` read. It returns `NX_MP6546_OK`
+  even when `sample.fault` is true. `read_angle` instead returns
+  `NX_MP6546_ERR_STATUS` for that fault and leaves the angle output unchanged.
+  `read_faults` reads `0x0D` and returns the positioned `NX_MP6546_FAULT_*`
+  bits without the INL compensation byte; this is a separate observation,
+  not a simultaneous sample. Read and conversion outputs remain unchanged on
+  every error. `raw_to_mdeg` converts a valid `0..0x7FFF` angle to
+  `0..359989` millidegrees; output width does not specify sensor accuracy.
+- **Vector commands and units** — `set_dq` accepts signed raw codes
+  `-512..511`, encodes 10-bit two's complement, and writes Ud (`0x08`) before
+  Uq (`0x09`). `set_uq` writes only Uq. Upper reserved command-word bits are
+  sent as zero. These calls require an already configured vector mode and do
+  not check or select it. `voltage_to_raw` calculates
+  `round(512 * sqrt(3) * voltage_mv / bus_voltage_mv)` using integer arithmetic.
+  A zero bus voltage or an out-of-range rounded result is rejected, without
+  clipping. Supply the measured bus voltage and limit the total d/q vector,
+  slew, current and stall duration in the application.
+- **PWM commands** — With duty mode already selected, `set_pwm` validates all
+  three phases before I/O, including a disabled phase's `duty_permille`, which
+  must be `0..1000`. Enabled duties are rounded to the hardware's 8-bit steps:
+  the lower byte runs in reverse, so 0‰ encodes as `0x1FF` and 1000‰ as
+  `0x100`. A disabled channel encodes as zero and differs from an enabled 0‰
+  channel. A/B/C are written to `0x07/0x08/0x09` in order; the manual describes
+  `0x09` as the group commit. An error can leave pending or effective values.
+  After application recovery, resubmit the entire group.
+- **Register access** — Raw accesses reject unpublished addresses, RO writes
+  and command reads. Raw writes leave reserved-bit and side-effect management
+  to the caller. `update_reg16` uses
+  `(old & ~mask) | (value & mask)`, accepts only documented ordinary writable
+  fields, rejects command/RO/production-code/reserved fields, and does no I/O
+  for a zero mask. A read failure never causes a write. Changing the hardware
+  address does not update the handle automatically: verify the new address
+  externally and reinitialize the handle with it.
+
+Serialize complete API calls, including read-modify-write and multi-register
+operations. D/Q and multi-register configuration writes are not guaranteed
+atomic. Any failed write may already have reached the chip, leaving a partial
+or unknown hardware state. The module does not retry, roll back, or change EN
+on an error. The application must decide when to stop and recover.
+
+Registers `0x07..0x09` are shared between vector and duty modes. Mode setters do
+not reinitialize their contents or sequence a safe transition; stale values
+can take on a different meaning after a mode change. The application must
+control transitions, readiness and output commands. EN low completely shuts
+down the chip, so configuration while EN is low is not assumed to work.
+`enter_normal` issues the work command without resetting or clearing faults.
+`enter_standby` sets `STDBY_EN` and issues the standby command; LDO behavior
+follows `TRIM_ENP`. SCL/SCK falling edges can wake the chip, including traffic
+on a shared bus, so standby is not a shutdown guarantee.
+
+In SPI angle mode, bring-up must also select sensor angle reading as described
+on p11: explicitly write zero to `NX_MP6546_REG_SPI_CMD` (`0x11`) and check
+the result. `read_sample` only reads `0x0C`; it does not implicitly change
+the sensor command or configure its protocol.
+
+The following application fragment binds an already verified port. Before
+calling `motor_step`, the application must have explicitly powered and
+configured the chip for vector mode, calibrated pole pairs/direction/offset,
+selected the sensor angle, completed alignment and established Ud = 0. The
+caller supplies a suitably limited Uq command, checks the returned result and
+handles any fault or I/O error through its own EN/recovery policy.
+
+```c
+#include "nx_mp6546.h"
+#include <stddef.h>
+
+/* Application port: complete verified register transactions synchronously. */
+extern bool port_read_reg16(void *ctx, uint8_t addr7,
+                            uint8_t reg, uint16_t *value);
+extern bool port_write_reg16(void *ctx, uint8_t addr7,
+                             uint8_t reg, uint16_t value);
+
+bool motor_bind(nx_mp6546_t *motor, void *port_ctx)
+{
+    const nx_mp6546_cfg_t cfg = {
+        .read_reg16  = port_read_reg16,
+        .write_reg16 = port_write_reg16,
+        .io_ctx      = port_ctx,
+        .addr7       = NX_MP6546_ADDR_LOW,
+    };
+    return nx_mp6546_init(motor, &cfg); /* Software binding only. */
+}
+
+nx_mp6546_ret_t motor_step(nx_mp6546_t *motor, int32_t uq_mv,
+                           uint32_t bus_mv, uint32_t *angle_mdeg)
+{
+    if (angle_mdeg == NULL) {
+        return NX_MP6546_ERR_PARAM;
+    }
+    nx_mp6546_sample_t sample;
+    nx_mp6546_ret_t ret = nx_mp6546_read_sample(motor, &sample);
+    if (ret != NX_MP6546_OK) {
+        return ret;
+    }
+    if (sample.fault) {
+        return NX_MP6546_ERR_STATUS;
+    }
+    int16_t uq;
+    ret = nx_mp6546_voltage_to_raw(uq_mv, bus_mv, &uq);
+    if (ret != NX_MP6546_OK) {
+        return ret;
+    }
+    ret = nx_mp6546_set_uq(motor, uq);
+    if (ret != NX_MP6546_OK) {
+        return ret; /* Output may have changed; caller handles recovery. */
+    }
+    *angle_mdeg = nx_mp6546_raw_to_mdeg(sample.angle_raw);
+    return NX_MP6546_OK;
+}
+```
+
+No API programs OTP, clears fault flags or sends broadcast commands. The manual
+does not publish the required programming, flag-clear or complete broadcast
+protocols; successful register writes do not imply persistent storage. The
+manual also conflicts on ADC resolution (12 bits on p1, 10 on p5), thermal
+shutdown thresholds (p5 versus p13), and the width/frequency encodings of
+`FLT_N_SVM` (p12 versus p15–16). Only its positioned mask is exposed, without
+a frequency enum. Ud uses `0x08` per p12 and the register map; the p17 heading
+incorrectly lists `0x09`. Resolve these points with MPS and verify the platform
+transactions, control sequencing and protection behavior on real hardware;
+host-side register simulation cannot establish hardware compatibility.
+
